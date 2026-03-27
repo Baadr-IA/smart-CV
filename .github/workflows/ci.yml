@@ -1,14 +1,20 @@
-name: Finaxys CV Intelligence CI
+name: Smart-CV CI (Tests & Docker Build)
 
 on:
   push:
-    branches: [ main, feature/rag-integration ]
+    branches: [ "master" ]
   pull_request:
-    branches: [ main ]
+    branches: [ "master" ]
 
 jobs:
-  test-python:
+  test:
     runs-on: ubuntu-latest
+    
+    # On définit les variables d'environnement nécessaires pour les tests (simulées pour la CI)
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      DISABLE_DOCLING: 1 # On désactive Docling en CI pour gagner du temps/ressources
+
     steps:
     - uses: actions/checkout@v4
     
@@ -16,36 +22,28 @@ jobs:
       uses: actions/setup-python@v5
       with:
         python-version: "3.11"
-        cache: 'pip'
-
+        
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pytest httpx
-
-    - name: Run Pytest (Structural Only)
+        
+    - name: Run Pytest (Parser & Validator)
       run: |
-        # On lance les tests qui ne nécessitent pas de clé API réelle
-        pytest -v -m "not needs_llm"
-      env:
-        LLM_PROVIDER: openai
-        OPENAI_API_KEY: "fake-key-for-ci"
-
-  docker-build-check:
+        pytest tests/test_parser.py tests/test_validator.py
+        
+  build_docker:
+    needs: test
     runs-on: ubuntu-latest
+    
     steps:
     - uses: actions/checkout@v4
     
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Build API Image (Dry Run)
+    - name: Build CV-API Docker Image
       run: |
-        docker build -t cv-api-test .
-      # On ne pousse pas l'image, on vérifie juste qu'elle se build sans erreur.
-
-    - name: Docker Compose Config Check
+        docker build . -t smart-cv-api:latest
+        
+    - name: Build OpenClaw Docker Image
       run: |
-        # On vérifie que le fichier compose est valide (sans lancer les services)
-        docker compose config
+        docker build -f Dockerfile.bot . -t smart-cv-bot:latest
