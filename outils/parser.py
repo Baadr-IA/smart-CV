@@ -1,0 +1,500 @@
+"""
+Parser de CVs : PDF (natif + scanné) et DOCX → texte propre.
+
+Stratégie :
+1. PDF        → OCR Vision via API (OpenAI-compatible)
+2. Fallback   → pypdf puis pytesseract OCR si nécessaire
+3. DOCX       → python-docx extraction paragraphes + tableaux
+4. Nettoyage  → suppression artefacts, normalisation espaces/sauts de ligne
+"""
+
+import base64
+import logging
+import os
+import re
+import tempfile
+from pathlib import Path
+
+from pypdf import PdfReader
+from docx import Document
+from openai import OpenAI
+
+logger = logging.getLogger(__name__)
+
+# Seuil : si pymupdf extrait moins de N caractères par page, on considère le PDF scanné
+MIN_CHARS_PER_PAGE = int(os.getenv("MIN_CHARS_PER_PAGE", "30"))
+OCR_MIN_CHARS = int(os.getenv("OCR_MIN_CHARS", "200"))
+OCR_MIN_ALPHA_RATIO = float(os.getenv("OCR_MIN_ALPHA_RATIO", "0.60"))
+PDF_PARSE_MODE = os.getenv("PDF_PARSE_MODE", "docling").lower() # Changé en docling par défaut
+LLM_VISION_MODEL = os.getenv("LLM_VISION_MODEL", "gpt-4o")
+
+
+def parse_file(file_path: str | Path) -> dict:
+    """Point d'entrée principal. Retourne un dict avec le texte et des métadonnées."""
+    file_path = Path(file_path)
+
+    if not file_path.exists():
+        raise FileNotFoundError(f"Fichier introuvable : {file_path}")
+
+    # CONFIGURATION
+    parse_mode = os.getenv("PDF_PARSE_MODE", "pypdf").lower() # On peut changer le défaut ici
+    suffix = file_path.suffix.lower()
+    text = ""
+    method = ""
+    disable_docling = os.getenv("DISABLE_DOCLING", "0") == "1"
+
+    # --- STRATÉGIE POUR LES PDF ---
+    if suffix == ".pdf":
+        # 1. Tenter d'abord l'extraction native (RAPIDE)
+        # Sauf si l'utilisateur a explicitement forcé un mode lourd
+        if parse_mode not in ["vision", "docling"]:
+            text, method = _parse_pdf_native(file_path)
+            quality = _compute_text_quality(text)
+            if _is_quality_sufficient(quality):
+                logger.info("Extraction native (pypdf) réussie et suffisante.")
+            else:
+                logger.info("Extraction native insuffisante (alpha_ratio=%.2f), passage aux fallbacks...", quality["alpha_ratio"])
+                text = "" # Reset pour déclencher le fallback
+
+        # 2. Tenter DOCLING (Idéal pour les scans structurés et tableaux)
+        if not text and not disable_docling:
+            try:
+                logger.info("Tentative de parsing via Docling : %s", file_path.name)
+                text = _parse_via_docling(file_path)
+                quality = _compute_text_quality(text)
+                if _is_quality_sufficient(quality):
+                    method = "docling-markdown"
+                else:
+                    logger.warning("Docling a produit un texte de faible qualité. Tentative Vision...")
+                    text = ""
+            except Exception as e:
+                logger.warning("Docling a échoué : %s. Tentative Vision...", e)
+
+        # 3. Tenter VISION API (Le dernier recours intelligent)
+        if not text:
+            try:
+                text = _ocr_pdf_via_api(file_path)
+                if text: method = "llm-vision-api"
+            except Exception as e:
+                logger.warning("Vision API a échoué : %s. Dernier recours Tesseract...", e)
+
+        # 4. Tenter TESSERACT (Le dernier recours local)
+        if not text:
+            text = _ocr_pdf(file_path)
+            method = "pytesseract-ocr"
+
+    # --- STRATÉGIE POUR LES DOCX ---
+    elif suffix in (".docx", ".doc"):
+        text, method = _parse_docx(file_path), "python-docx"
+    
+    else:
+        raise ValueError(f"Format non supporté : {suffix}. Formats acceptés : .pdf, .docx")
+
+    # Nettoyage et Qualité
+    text = _clean_text(text, is_markdown=(method == "docling-markdown"))
+    final_quality = _compute_text_quality(text)
+
+    result = {
+        "source": file_path.name,
+        "format": suffix.lstrip("."),
+        "method": method,
+        "char_count": len(text),
+        "quality": final_quality,
+        "text": text,
+    }
+
+    logger.info(
+        "Parsing terminé : %s | méthode=%s | %d caractères | alpha_ratio=%.2f",
+        file_path.name,
+        method,
+        len(text),
+        final_quality["alpha_ratio"],
+    )
+
+    return result
+
+
+def _parse_pdf_native(file_path: Path) -> tuple[str, str]:
+    """Extraction brute via pypdf sans OCR."""
+    try:
+        reader = PdfReader(str(file_path))
+        pages_text = [page.extract_text() or "" for page in reader.pages]
+        full_text = "\n".join(pages_text)
+        return full_text, "pypdf"
+    except Exception as e:
+        logger.warning("Erreur pypdf : %s", e)
+        return "", ""
+
+
+def _parse_via_docling(file_path: Path) -> str:
+    """
+    Utilise Docling pour extraire le contenu en Markdown structuré.
+
+    Configuration optimisée pour les CVs :
+    - OCR activé pour les PDFs scannés (EasyOCR)
+    - Résolution 300 DPI pour l'OCR
+    - Reconstruction des tableaux (langues, compétences en tableau)
+    - Pour les PDFs natifs, Docling lit directement les vecteurs PDF
+      (aucune binarisation n'est appliquée ni utile dans ce cas)
+    """
+    try:
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
+        from docling.datamodel.base_models import InputFormat
+
+        pipeline_options = PdfPipelineOptions()
+        pipeline_options.do_ocr = True                  # Active l'OCR pour les scans
+        pipeline_options.do_table_structure = True      # Reconstruit les tableaux (langues, compétences)
+        # pipeline_options.ocr_options.use_gpu = False  # Supprimé car cause des erreurs selon la version
+        pipeline_options.images_scale = 2.0             # Résolution ×2 pour l'OCR interne (~300 DPI)
+
+        converter = DocumentConverter(
+            format_options={
+                InputFormat.PDF: PdfFormatOption(pipeline_options=pipeline_options)
+            }
+        )
+        result = converter.convert(str(file_path))
+        return result.document.export_to_markdown()
+
+    except ImportError:
+        raise ImportError("Docling n'est pas installé. pip install docling")
+    except TypeError:
+        # Ancienne version de docling sans PdfPipelineOptions — fallback basique
+        logger.warning("Version de Docling sans PdfPipelineOptions — configuration basique utilisée.")
+        from docling.document_converter import DocumentConverter
+        converter = DocumentConverter()
+        result = converter.convert(str(file_path))
+        return result.document.export_to_markdown()
+
+
+
+# ---------------------------------------------------------------------------
+# PDF
+# ---------------------------------------------------------------------------
+
+def _parse_pdf(file_path: Path) -> tuple[str, str]:
+    """Extrait le texte d'un PDF en privilégiant l'OCR Vision via API."""
+    if PDF_PARSE_MODE in {"api", "api-vision", "vision"}:
+        try:
+            logger.info("Extraction PDF via API Vision...")
+            vision_text = _ocr_pdf_via_api(file_path)
+            vision_quality = _compute_text_quality(vision_text)
+            logger.info(
+                "Résultat API Vision : char_count=%d, alpha_ratio=%.2f",
+                vision_quality["char_count"],
+                vision_quality["alpha_ratio"],
+            )
+            if _is_quality_sufficient(vision_quality):
+                return vision_text, "llm-vision-api"
+            logger.warning("Qualité API Vision insuffisante, fallback local activé")
+        except Exception as e:
+            logger.warning("API Vision indisponible (%s), fallback local activé", e)
+
+    # Fallback local : pypdf natif puis OCR pytesseract
+    reader = PdfReader(str(file_path))
+    pages_text = []
+
+    for page in reader.pages:
+        text = page.extract_text() or ""
+        pages_text.append(text)
+
+    full_text = "\n".join(pages_text)
+    avg_chars = len(full_text.strip()) / max(len(pages_text), 1)
+    native_quality = _compute_text_quality(full_text)
+
+    if avg_chars >= MIN_CHARS_PER_PAGE and _is_quality_sufficient(native_quality):
+        logger.info(
+            "PDF natif détecté (%d car/page en moyenne, alpha_ratio=%.2f)",
+            int(avg_chars),
+            native_quality["alpha_ratio"],
+        )
+        return full_text, "pypdf"
+
+    # Fallback OCR
+    logger.info(
+        "Texte natif insuffisant (%d car/page, alpha_ratio=%.2f). Tentative OCR pytesseract...",
+        int(avg_chars),
+        native_quality["alpha_ratio"],
+    )
+    ocr_text = _ocr_pdf(file_path)
+    ocr_quality = _compute_text_quality(ocr_text)
+    logger.info(
+        "Résultat OCR : char_count=%d, alpha_ratio=%.2f",
+        ocr_quality["char_count"],
+        ocr_quality["alpha_ratio"],
+    )
+
+    if _is_quality_sufficient(native_quality) and not _is_quality_sufficient(ocr_quality):
+        logger.warning("OCR de faible qualité, conservation du texte natif initial")
+        return full_text, "pypdf"
+
+    return ocr_text, "pytesseract-ocr"
+
+
+def _get_vision_client() -> tuple[OpenAI, str]:
+    """Crée un client OpenAI-compatible pour l'OCR Vision."""
+    provider = os.getenv("LLM_PROVIDER", "copilot").lower()
+
+    if provider == "gemini":
+        api_key = os.getenv("GEMINI_API_KEY", "")
+        base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
+        model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    elif provider == "copilot":
+        api_key = os.getenv("GITHUB_TOKEN", "")
+        base_url = "https://models.inference.ai.azure.com"
+        model = LLM_VISION_MODEL
+    else:
+        # Fallback simple pour provider non vision-friendly dans ce parseur
+        api_key = os.getenv("GITHUB_TOKEN", "")
+        base_url = "https://models.inference.ai.azure.com"
+        model = LLM_VISION_MODEL
+
+    if not api_key:
+        raise RuntimeError("Clé API manquante pour l'OCR Vision")
+
+    return OpenAI(api_key=api_key, base_url=base_url), model
+
+
+def _guess_mime_type(file_path: str) -> str:
+    ext = os.path.splitext(file_path.lower())[1]
+    if ext in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if ext == ".png":
+        return "image/png"
+    if ext == ".webp":
+        return "image/webp"
+    return "image/png"
+
+
+def _encode_file(file_path: str) -> str:
+    with open(file_path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
+
+
+def _pdf_to_images(pdf_path: Path, temp_dir: str) -> list[str]:
+    """Render PDF pages to PNG images for Vision OCR."""
+    try:
+        import fitz  # PyMuPDF
+    except Exception as e:
+        raise RuntimeError(
+            "PyMuPDF requis pour le rendu PDF->images. "
+            "Installez pymupdf puis relancez. "
+            f"Détail: {e}"
+        )
+
+    doc = fitz.open(str(pdf_path))
+    paths = []
+    for i, page in enumerate(doc, start=1):
+        mat = fitz.Matrix(2.5, 2.5)
+        pix = page.get_pixmap(matrix=mat, alpha=False)
+        image_path = os.path.join(temp_dir, f"page_{i}.png")
+        pix.save(image_path)
+        paths.append(image_path)
+    doc.close()
+    return paths
+
+
+def _extract_one_image_with_llm(client: OpenAI, model: str, image_path: str, page_index: int) -> str:
+    mime_type = _guess_mime_type(image_path)
+    base64_content = _encode_file(image_path)
+
+    response = client.chat.completions.create(
+        model=model,
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": (
+                            "Tu fais uniquement de l'OCR. Extrais tout le texte visible de cette page de CV. "
+                            "Conserve au mieux l'ordre de lecture. Aucune explication."
+                        ),
+                    },
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime_type};base64,{base64_content}"},
+                    },
+                ],
+            }
+        ],
+        temperature=0,
+        max_tokens=4096,
+    )
+
+    content = response.choices[0].message.content
+    text = content if isinstance(content, str) else str(content)
+    return f"\n===== PAGE {page_index} =====\n{text.strip()}\n"
+
+
+def _ocr_pdf_via_api(file_path: Path) -> str:
+    """OCR d'un PDF via API Vision (rendu pages -> image -> LLM)."""
+    client, model = _get_vision_client()
+
+    with tempfile.TemporaryDirectory(prefix="ocr_llm_pages_") as temp_dir:
+        image_paths = _pdf_to_images(file_path, temp_dir)
+        if not image_paths:
+            raise RuntimeError("Aucune page extraite du PDF")
+
+        chunks = []
+        for idx, img_path in enumerate(image_paths, start=1):
+            logger.info("OCR Vision page %d/%d", idx, len(image_paths))
+            chunks.append(_extract_one_image_with_llm(client, model, img_path, idx))
+        return "\n".join(chunks).strip()
+
+
+def _ocr_pdf(file_path: Path) -> str:
+    """OCR d'un PDF scanné page par page via pytesseract (utilise PyMuPDF pour le rendu)."""
+    try:
+        import pytesseract
+        from PIL import Image
+        import fitz
+        from outils.image_processor import preprocess_for_ocr
+
+        # Configuration Tesseract pour Windows si non présent dans le PATH
+        if os.name == 'nt':
+            tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+            if os.path.exists(tesseract_cmd):
+                pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
+            else:
+                logger.warning("Tesseract non trouvé à l'emplacement par défaut sur Windows.")
+    except ImportError:
+        raise RuntimeError(
+            "PyMuPDF, pytesseract et opencv sont requis pour l'OCR. "
+            "Installe-les avec : pip install pymupdf pytesseract opencv-python\n"
+        )
+
+    doc = fitz.open(str(file_path))
+    pages_text = []
+
+    # Dossier de debug pour les images binarisées
+    debug_dir = Path("debug_ocr")
+    debug_dir.mkdir(exist_ok=True)
+
+    for page_num, page in enumerate(doc):
+        # Rendu en haute résolution (300 DPI)
+        pix = page.get_pixmap(matrix=fitz.Matrix(300/72, 300/72)) 
+        img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+        
+        # --- PHASE 3 : NETTOYAGE ADAPTATIF ---
+        # Nettoyage de l'image (Grayscale, CLAHE, Adaptive Threshold) avant OCR
+        img = preprocess_for_ocr(img)
+
+        # Sauvegarde de l'image binarisée pour debug
+        debug_path = debug_dir / f"{file_path.stem}_p{page_num+1}_bin.png"
+        img.save(debug_path)
+        logger.info(f"Image binarisée sauvegardée : {debug_path}")
+        
+        # OCR via pytesseract
+        text = pytesseract.image_to_string(img, lang="fra+eng")
+        pages_text.append(text)
+        logger.debug("OCR page %d (nettoyée) : %d caractères", page_num + 1, len(text))
+    
+    doc.close()
+    return "\n".join(pages_text)
+
+
+# ---------------------------------------------------------------------------
+# DOCX
+# ---------------------------------------------------------------------------
+
+def _parse_docx(file_path: Path) -> str:
+    """Extrait le texte d'un fichier DOCX (paragraphes + tableaux)."""
+    doc = Document(str(file_path))
+    parts = []
+
+    # Paragraphes
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if text:
+            parts.append(text)
+
+    # Tableaux (souvent utilisés dans les CVs pour les compétences / dates)
+    for table in doc.tables:
+        for row in table.rows:
+            row_text = " | ".join(cell.text.strip() for cell in row.cells if cell.text.strip())
+            if row_text:
+                parts.append(row_text)
+
+    return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Nettoyage texte
+# ---------------------------------------------------------------------------
+
+def _clean_text(text: str, is_markdown: bool = False) -> str:
+    """Nettoie le texte extrait : artefacts, espaces multiples, lignes vides."""
+    if not text:
+        return ""
+
+    # Remplacer les caractères de contrôle (sauf newline et tab)
+    text = re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]", "", text)
+
+    # Normaliser les fins de ligne Windows
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+
+    if not is_markdown:
+        # Supprimer les espaces en fin de ligne
+        text = re.sub(r"[ \t]+$", "", text, flags=re.MULTILINE)
+        # Supprimer les espaces multiples (garder un seul)
+        text = re.sub(r"[ \t]{2,}", " ", text)
+        # Recoudre les mots coupés en fin de ligne (tiret + saut de ligne)
+        text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)
+    else:
+        # En Markdown, on est plus conservateur sur les espaces pour ne pas briser les tableaux
+        text = re.sub(r"[ \t]+$", "", text, flags=re.MULTILINE)
+
+    # Réduire les lignes vides multiples (max 2 consécutives)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+
+    return text.strip()
+
+
+def _compute_text_quality(text: str) -> dict:
+    """Calcule des métriques simples de qualité du texte extrait."""
+    stripped = text or ""
+    char_count = len(stripped)
+    non_ws_chars = sum(1 for c in stripped if not c.isspace())
+    alpha_count = sum(1 for c in stripped if c.isalpha())
+    alnum_count = sum(1 for c in stripped if c.isalnum())
+    alpha_ratio = alpha_count / max(alnum_count, 1)
+    word_count = len(re.findall(r"\S+", stripped))
+    line_count = stripped.count("\n") + 1 if stripped else 0
+
+    return {
+        "char_count": char_count,
+        "non_whitespace_count": non_ws_chars,
+        "word_count": word_count,
+        "line_count": line_count,
+        "alpha_ratio": round(alpha_ratio, 4),
+    }
+
+
+def _is_quality_sufficient(quality: dict) -> bool:
+    """Détermine si la qualité du texte est suffisante pour le pipeline."""
+    return (
+        quality.get("char_count", 0) >= OCR_MIN_CHARS
+        and quality.get("alpha_ratio", 0.0) >= OCR_MIN_ALPHA_RATIO
+    )
+
+
+# ---------------------------------------------------------------------------
+# Utilitaire CLI pour test rapide
+# ---------------------------------------------------------------------------
+
+if __name__ == "__main__":
+    import sys
+    import json
+
+    logging.basicConfig(level=logging.DEBUG, format="%(levelname)s | %(message)s")
+
+    if len(sys.argv) < 2:
+        print("Usage: python -m skills.parser <fichier.pdf|fichier.docx>")
+        sys.exit(1)
+
+    result = parse_file(sys.argv[1])
+    # Afficher les métadonnées (sans le texte complet pour la lisibilité)
+    meta = {k: v for k, v in result.items() if k != "text"}
+    print(json.dumps(meta, ensure_ascii=False, indent=2))
+    print(f"\n--- Texte extrait (premiers 500 caractères) ---\n{result['text'][:500]}")

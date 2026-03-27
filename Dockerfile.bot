@@ -1,0 +1,8 @@
+FROM node:22-slim
+
+# Force la version publiée récente qui expose bien le binaire `openclaw`.
+RUN npm install -g openclaw@latest
+
+WORKDIR /root
+ENTRYPOINT ["openclaw"]
+CMD ["gateway", "--allow-unconfigured"]

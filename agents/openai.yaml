@@ -1,0 +1,20 @@
+skills:
+  - name: docx
+    display_name: Docx Expert
+    short_description: "Expert pour la création, l'édition et l'analyse de documents Word (.docx)."
+    path: .claude/skills/docx
+
+  - name: pdf-expert
+    display_name: PDF Technical Expert
+    short_description: "Expert technique pour l'extraction et l'OCR de fichiers PDF."
+    path: .claude/skills/pdf-expert
+
+  - name: cv-extractor-expert
+    display_name: CV Extractor Expert
+    short_description: "Expert métier pour l'extraction de sections de CV complexes."
+    path: .claude/skills/cv-extractor-expert
+
+  - name: cv-classifier-expert
+    display_name: CV Classifier Expert
+    short_description: "Expert pour la classification de technos selon le référentiel Finaxys."
+    path: .claude/skills/cv-classifier-expert

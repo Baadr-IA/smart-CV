@@ -1,0 +1,15 @@
+{
+  "name": "recherche_cv_python",
+  "description": "Exécute le script Python local pour rechercher des CV dans la base Finaxys.",
+  "type": "shell",
+  "command": "python \"C:\\Users\\Badr LAMBARKI\\Desktop\\Analyse de CV\\projet-cv-finaxys\\recherche_cv.py\" \"$query\"",
+  "parameters": {
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "La recherche (ex: développeur PHP Scrum Master)"
+      }
+    },
+    "required": ["query"]
+  }
+}

@@ -1,0 +1,34 @@
+# Env
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# Données Projet (Confidentialité)
+input/
+output/
+logs/
+temp_api/
+temp_unpack/
+vector_db/
+
+# Tesseract
+*.traineddata

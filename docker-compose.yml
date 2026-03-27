@@ -1,0 +1,43 @@
+services:
+  # L'API Python (Le Cerveau)
+  cv-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cv-finaxys-api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./output:/app/output
+      - ./vector_db:/app/vector_db
+      - ./logs:/app/logs
+      - ./input:/app/input
+    environment:
+      - DISABLE_DOCLING=0
+    env_file: .env
+    restart: always
+
+  # Le Bot Telegram (L'Interface)
+  openclaw:
+    build:
+      context: .
+      dockerfile: Dockerfile.bot
+    container_name: openclaw-bot
+    working_dir: /root
+    volumes:
+      # Configuration Docker dédiée (n'impacte pas ~/.openclaw local)
+      - "./openclaw_docker:/root/.openclaw"
+      # CV disponibles pour le bot
+      - "./input:/data/input:ro"
+      # Base vectorielle disponible pour diagnostic
+      - "./vector_db:/data/vector_db:ro"
+    environment:
+      # Autorise les appels HTTP vers l'API interne et localhost
+      - OPENCLAW_ALLOW_INSECURE_HTTP=true
+      # On force l'URL de l'API pour que le bot communique avec cv-api
+      - API_URL=http://cv-api:8000
+      # Utilise la clé OpenAI de l'environnement/.env pour l'agent Docker
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+    depends_on:
+      - cv-api
+    restart: always

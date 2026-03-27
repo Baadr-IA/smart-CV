@@ -1,0 +1,15 @@
+{
+  "name": "recherche_cv_finaxys",
+  "description": "Recherche sémantique de candidats via PowerShell sur localhost.",
+  "type": "shell",
+  "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\Badr LAMBARKI\\Desktop\\Analyse de CV\\projet-cv-finaxys\\tools\\recherche_cv.ps1\" -query \"$query\"",
+  "parameters": {
+    "properties": {
+      "query": {
+        "type": "string",
+        "description": "La recherche (ex: développeur PHP)"
+      }
+    },
+    "required": ["query"]
+  }
+}

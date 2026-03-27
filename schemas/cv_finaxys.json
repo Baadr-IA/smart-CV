@@ -1,0 +1,124 @@
+{
+  "identite": {
+    "nom": "NOM",
+    "prenom": "PRENOM",
+    "email": null,
+    "localisation": null,
+    "telephone": null,
+    "linkedin": null
+  },
+
+  "titre_professionnel": "Ingénieur Machine Learning",
+  "type_poste": "Stage de fin d'études",
+  "profil": null,
+
+  "competences": [
+    {
+      "nom": "Python",
+      "categorie": "Langages de programmation",
+      "niveau": "Confirmé",
+      "annees_experience": null
+    },
+    {
+      "nom": "PyTorch",
+      "categorie": "Data Science",
+      "niveau": "Confirmé",
+      "annees_experience": null
+    },
+    {
+      "nom": "SQL",
+      "categorie": "Bases de données",
+      "niveau": "Intermédiaire",
+      "annees_experience": null
+    },
+    {
+      "nom": "Docker",
+      "categorie": "Devops",
+      "niveau": "Intermédiaire",
+      "annees_experience": null
+    },
+    {
+      "nom": "Git",
+      "categorie": "Devops",
+      "niveau": "Confirmé",
+      "annees_experience": null
+    }
+  ],
+
+  "experiences": [
+    {
+      "titre": "STAGIAIRE MACHINE LEARNING",
+      "entreprise": "Laboratoire / Entreprise",
+      "date_debut": "2025-01",
+      "date_fin": "2025-06",
+      "en_cours": false,
+      "projet": "Nom du projet",
+      "equipe": "Composition et encadrement de l'équipe",
+      "methodologie": "Réunion hebdomadaire",
+      "missions": [
+        "Première mission du stage",
+        "Deuxième mission du stage"
+      ],
+      "technologies": [
+        "Python", "PyTorch", "Docker"
+      ],
+      "resultats": [
+        "Résultat chiffré si disponible"
+      ]
+    }
+  ],
+
+  "projets_academiques": [
+    {
+      "nom": "Nom du projet académique",
+      "etablissement": "ENSEIRB MATMECA",
+      "equipe": "Binôme supervisé par un enseignant-chercheur",
+      "duree": "5 mois",
+      "missions": [
+        "Première mission du projet",
+        "Deuxième mission du projet"
+      ],
+      "technologies": [
+        "Python", "TensorFlow"
+      ]
+    }
+  ],
+
+  "formations": [
+    {
+      "diplome": "MSc en Ingénierie - Traitement du Signal et de l'Image",
+      "etablissement": "ENSEIRB MATMECA",
+      "annee": 2026
+    },
+    {
+      "diplome": "Classes Préparatoires (MPSI-MP)",
+      "etablissement": "Lycée / CPGE",
+      "annee": 2023
+    }
+  ],
+
+  "certifications": [],
+
+  "langues": [
+    {
+      "langue": "Anglais",
+      "niveau": "Courant",
+      "certification": null
+    },
+    {
+      "langue": "Français",
+      "niveau": "Langue maternelle",
+      "certification": null
+    }
+  ],
+
+  "centres_interet": "Président de l'association EirblA : organisation d'événements tech",
+
+  "metadata": {
+    "date_extraction": "YYYY-MM-DDTHH:MM:SSZ",
+    "source_fichier": "cv_source.pdf",
+    "score_completude": 0.0,
+    "champs_incertains": [],
+    "version_pipeline": "1.0.0"
+  }
+}

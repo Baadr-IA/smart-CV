@@ -1,0 +1,15 @@
+{
+  "name": "analyser_cv_finaxys",
+  "description": "Utilisez EXCLUSIVEMENT cet outil pour analyser un CV local. Ne pas utiliser curl ou Invoke-WebRequest manuellement. Cet outil fait tout via PowerShell sur localhost.",
+  "type": "shell",
+  "command": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File \"C:\\Users\\Badr LAMBARKI\\.openclaw\\tools\\analyser_cv.ps1\" -filename \"$filename\"",
+  "parameters": {
+    "properties": {
+      "filename": {
+        "type": "string",
+        "description": "Le nom du fichier dans input/ (ex: radiologue.pdf)"
+      }
+    },
+    "required": ["filename"]
+  }
+}
