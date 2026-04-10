@@ -167,7 +167,10 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await update.message.reply_text(
         "👋 *Bonjour ! Je suis l'assistant RH Finaxys.*\n\n"
-        "📄 Envoie-moi un CV en *PDF* ou *DOCX* et je l'analyse automatiquement.\n"
+        "📄 Envoie-moi un CV en *PDF* ou *DOCX* et je :\n"
+        "  • Extrais et structure les informations\n"
+        "  • Génère automatiquement la *fiche Finaxys* (.docx)\n"
+        "  • Indexe le profil pour la recherche\n\n"
         "🔍 Utilise `/search <recherche>` pour trouver un profil dans la base.\n\n"
         "Tape /help pour plus d'infos.",
         parse_mode="Markdown",
@@ -180,7 +183,10 @@ async def cmd_help(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     await update.message.reply_text(
         "*Commandes disponibles :*\n\n"
-        "📄 *Envoyer un fichier* (PDF/DOCX) → analyse complète du CV\n"
+        "📄 *Envoyer un fichier* (PDF/DOCX) :\n"
+        "  → Analyse complète du CV\n"
+        "  → Génération de la *fiche Finaxys* au format Word\n"
+        "  → Indexation automatique dans la base de profils\n\n"
         "🔍 `/search <query>` → recherche sémantique dans les CV indexés\n"
         "   _Exemple : /search développeur Java 5 ans d'expérience_\n\n"
         "ℹ️ `/start` → message de bienvenue\n"
