@@ -1,4 +1,5 @@
 import logging
+import os
 from typing import List, Optional
 import chromadb
 from chromadb.utils import embedding_functions
@@ -57,6 +58,7 @@ def cv_to_searchable_text(cv: CVData) -> str:
 
 class VectorStoreManager:
     def __init__(self, db_path: str = "./vector_db"):
+        db_path = os.getenv("CHROMA_DB_PATH", db_path)
         self.client = chromadb.PersistentClient(path=db_path)
         # On utilise un modèle d'embedding local gratuit (all-MiniLM-L6-v2)
         self.embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(

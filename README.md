@@ -91,3 +91,38 @@ Les fichiers sensibles (`.env`, `vector_db/`, `input/`, `output/`) sont exclus d
 
 ---
 **Développé par Badr LAMBARKI EL ALLIOUI**
+
+## Security (Production)
+- Set `API_KEY` and send header `X-API-Key: <value>` on all API calls.
+- For local dev, you can set `API_KEY_DISABLED=true`.
+- Configure CORS explicitly with `CORS_ALLOW_ORIGINS=https://app.example.com` (comma-separated).
+- Use `RATE_LIMIT_PER_MIN`, `MAX_CONCURRENT_JOBS`, and `MAX_UPLOAD_MB` to protect the API.
+- Put the API behind HTTPS (ALB + ACM in AWS).
+
+## Storage (S3 + EFS)
+When running on AWS with S3 for `input/` + `output/` and EFS for ChromaDB:
+```env
+STORAGE_MODE=s3
+S3_BUCKET=your-bucket
+S3_INPUT_PREFIX=input/
+S3_OUTPUT_PREFIX=output/
+S3_REGION=eu-west-3
+CHROMA_DB_PATH=/mnt/efs/vector_db
+```
+
+## CI/CD (ECR)
+Workflow: `.github/workflows/deploy-ecr.yml`
+Required GitHub secrets:
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_REGION`
+- `ECR_REGISTRY` (e.g. 123456789012.dkr.ecr.eu-west-3.amazonaws.com)
+- `ECR_REPOSITORY_API` (e.g. cv-finaxys-api)
+- `ECR_REPOSITORY_BOT` (e.g. cv-finaxys-bot)
+
+## Telegram Bot Access
+Whitelist chat IDs with:
+```env
+TELEGRAM_ALLOWED_CHATS=123456789,987654321
+```
+If empty, the bot accepts all chats.

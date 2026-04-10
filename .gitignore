@@ -30,5 +30,16 @@ temp_api/
 temp_unpack/
 vector_db/
 
+# OpenClaw Docker (Secrets et sessions)
+openclaw_docker/agents/*/sessions/
+openclaw_docker/memory/
+openclaw_docker/identity/
+openclaw_docker/devices/
+openclaw_docker/telegram/*.txt
+openclaw_docker/logs/
+openclaw_docker/*.log
+openclaw_docker/*.bak*
+openclaw_docker/update-check.json
+
 # Tesseract
 *.traineddata

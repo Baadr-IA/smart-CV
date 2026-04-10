@@ -58,6 +58,7 @@ def process_cv_pipeline(
         stem = file_path.stem
         word_path = output_dir / f"{stem}_finaxys.docx"
         generate_word(cv_data, word_path)
-        cv_data["metadata"]["word_path"] = str(word_path)
+        cv_data["metadata"]["word_path"] = word_path.name
+        cv_data["metadata"]["word_filename"] = word_path.name
 
     return cv_data

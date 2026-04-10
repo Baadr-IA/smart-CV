@@ -45,9 +45,16 @@ def parse_file(file_path: str | Path) -> dict:
 
     # --- STRATÉGIE POUR LES PDF ---
     if suffix == ".pdf":
+        # 0. Mode colonnes explicite
+        if parse_mode in ["pymupdf-columns", "columns"]:
+            text, method = _parse_pdf_pymupdf_columns(file_path)
+            quality = _compute_text_quality(text)
+            if not _is_quality_sufficient(quality):
+                text = ""
+
         # 1. Tenter d'abord l'extraction native (RAPIDE)
         # Sauf si l'utilisateur a explicitement forcé un mode lourd
-        if parse_mode not in ["vision", "docling"]:
+        if parse_mode not in ["vision", "docling", "pymupdf-columns", "columns"]:
             text, method = _parse_pdf_native(file_path)
             quality = _compute_text_quality(text)
             if _is_quality_sufficient(quality):
@@ -55,6 +62,15 @@ def parse_file(file_path: str | Path) -> dict:
             else:
                 logger.info("Extraction native insuffisante (alpha_ratio=%.2f), passage aux fallbacks...", quality["alpha_ratio"])
                 text = "" # Reset pour déclencher le fallback
+
+        # 1bis. Mode auto : détecter colonnes et basculer
+        if not text and parse_mode in ["auto", "smart"]:
+            if _is_two_columns_pdf(file_path):
+                logger.info("Colonnes détectées : extraction PyMuPDF (colonnes).")
+                text, method = _parse_pdf_pymupdf_columns(file_path)
+                quality = _compute_text_quality(text)
+                if not _is_quality_sufficient(quality):
+                    text = ""
 
         # 2. Tenter DOCLING (Idéal pour les scans structurés et tableaux)
         if not text and not disable_docling:
@@ -124,6 +140,84 @@ def _parse_pdf_native(file_path: Path) -> tuple[str, str]:
     except Exception as e:
         logger.warning("Erreur pypdf : %s", e)
         return "", ""
+
+
+def _kmeans_1d(values: list[float], iters: int = 10) -> list[float]:
+    if not values:
+        return []
+    v = sorted(values)
+    c1 = v[len(v) // 4]
+    c2 = v[(3 * len(v)) // 4]
+    for _ in range(iters):
+        g1, g2 = [], []
+        for x in v:
+            if abs(x - c1) <= abs(x - c2):
+                g1.append(x)
+            else:
+                g2.append(x)
+        if g1:
+            c1 = sum(g1) / len(g1)
+        if g2:
+            c2 = sum(g2) / len(g2)
+    return [c1, c2]
+
+
+def _is_two_columns_pdf(file_path: Path) -> bool:
+    """Heuristique simple pour détecter 2 colonnes via positions X."""
+    try:
+        import fitz
+    except Exception:
+        return False
+
+    doc = fitz.open(str(file_path))
+    xs: list[float] = []
+    for page in doc:
+        blocks = page.get_text("blocks")
+        for b in blocks:
+            if b[4].strip():
+                xs.append(float(b[0]))
+        if len(xs) > 200:
+            break
+    doc.close()
+
+    if len(xs) < 10:
+        return False
+
+    centers = _kmeans_1d(xs)
+    if len(centers) < 2:
+        return False
+    return abs(centers[0] - centers[1]) > 80
+
+
+def _parse_pdf_pymupdf_columns(file_path: Path) -> tuple[str, str]:
+    """Extraction PyMuPDF avec regroupement par colonnes (gauche puis droite)."""
+    try:
+        import fitz
+    except Exception as e:
+        logger.warning("PyMuPDF requis pour l'extraction colonnes : %s", e)
+        return "", ""
+
+    doc = fitz.open(str(file_path))
+    out_lines = []
+    for page in doc:
+        blocks = [b for b in page.get_text("blocks") if b[4].strip()]
+        if not blocks:
+            continue
+        xs = [b[0] for b in blocks]
+        centers = _kmeans_1d(xs)
+        if len(centers) < 2:
+            ordered = sorted(blocks, key=lambda b: (b[1], b[0]))
+        else:
+            split = sum(centers) / 2
+            left = [b for b in blocks if b[0] <= split]
+            right = [b for b in blocks if b[0] > split]
+            left.sort(key=lambda b: (b[1], b[0]))
+            right.sort(key=lambda b: (b[1], b[0]))
+            ordered = left + right
+        out_lines.extend([b[4].strip() for b in ordered])
+        out_lines.append("")
+    doc.close()
+    return "\n".join(out_lines).strip(), "pymupdf-columns"
 
 
 def _parse_via_docling(file_path: Path) -> str:

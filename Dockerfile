@@ -41,7 +41,16 @@ RUN python3 -c "from docling.document_converter import DocumentConverter; \
 COPY . .
 
 # Créer les dossiers nécessaires
-RUN mkdir -p logs output temp_api temp_unpack
+RUN adduser --disabled-password --gecos "" appuser \
+    && mkdir -p logs output temp_api temp_unpack \
+    && chown -R appuser:appuser /app
+
+USER appuser
+
+# Healthcheck (can be disabled for non-API containers)
+ENV HEALTHCHECK_URL=http://localhost:8000/health
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD python -c "import os,urllib.request,sys; disabled=os.getenv('DISABLE_HEALTHCHECK','false').lower()=='true'; url=os.getenv('HEALTHCHECK_URL',''); sys.exit(0) if (disabled or not url) else None; urllib.request.urlopen(url, timeout=3).read()"
 
 # Exposer le port de l'API
 EXPOSE 8000

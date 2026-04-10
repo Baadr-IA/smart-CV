@@ -17,27 +17,21 @@ services:
     env_file: .env
     restart: always
 
-  # Le Bot Telegram (L'Interface)
-  openclaw:
+  # Le Bot Telegram (même image que cv-api, commande différente)
+  cv-bot:
     build:
       context: .
-      dockerfile: Dockerfile.bot
-    container_name: openclaw-bot
-    working_dir: /root
+      dockerfile: Dockerfile
+    container_name: cv-finaxys-bot
+    command: python bot.py
     volumes:
-      # Configuration Docker dédiée (n'impacte pas ~/.openclaw local)
-      - "./openclaw_docker:/root/.openclaw"
-      # CV disponibles pour le bot
-      - "./input:/data/input:ro"
-      # Base vectorielle disponible pour diagnostic
-      - "./vector_db:/data/vector_db:ro"
+      - ./output:/app/output
+      - ./vector_db:/app/vector_db
+      - ./logs:/app/logs
+      - ./input:/app/input
     environment:
-      # Autorise les appels HTTP vers l'API interne et localhost
-      - OPENCLAW_ALLOW_INSECURE_HTTP=true
-      # On force l'URL de l'API pour que le bot communique avec cv-api
-      - API_URL=http://cv-api:8000
-      # Utilise la clé OpenAI de l'environnement/.env pour l'agent Docker
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - DISABLE_HEALTHCHECK=true
+    env_file: .env
     depends_on:
       - cv-api
     restart: always
