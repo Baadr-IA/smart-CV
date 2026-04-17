@@ -4,6 +4,7 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    image: smart-cv-app:latest # On donne un nom fixe à l'image
     container_name: cv-finaxys-api
     ports:
       - "8000:8000"
@@ -17,11 +18,9 @@ services:
     env_file: .env
     restart: always
 
-  # Le Bot Telegram (même image que cv-api, commande différente)
+  # Le Bot Telegram (Utilise la MÊME image que l'API)
   cv-bot:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: smart-cv-app:latest # Utilise l'image construite par cv-api
     container_name: cv-finaxys-bot
     command: python bot.py
     volumes:
