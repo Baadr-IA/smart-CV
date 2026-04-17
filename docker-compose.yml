@@ -13,7 +13,7 @@ services:
       - ./logs:/app/logs
       - ./input:/app/input
     environment:
-      - DISABLE_DOCLING=0
+      - DISABLE_DOCLING=1
     env_file: .env
     restart: always
 
