@@ -31,10 +31,9 @@ python-multipart>=0.0.9
 # --- Bot Telegram ---
 python-telegram-bot>=21.0.0
 
-# --- RAG & Vector DB (Version légère) ---
-# On installe torch en version CPU uniquement pour gagner 2 Go
+# --- RAG & Vector DB (Version légère CPU) ---
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch--index-url https://download.pytorch.org/whl/cpu
+torch
 sentence-transformers>=2.2.0
 chromadb>=0.4.0
 langchain-community>=0.0.10
