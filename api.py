@@ -42,6 +42,20 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def _parse_cors_origins() -> list[str]:
+    raw = os.getenv("CORS_ALLOW_ORIGINS", "").strip()
+    if not raw:
+        return []
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _cors_allow_credentials(origins: list[str]) -> bool:
+    want = os.getenv("CORS_ALLOW_CREDENTIALS", "false").lower() == "true"
+    if "*" in origins:
+        return False
+    return want
+
+
 app = FastAPI(
     title="CV Finaxys API",
     description="API d'analyse de CV (PDF/DOCX) pour transformation en JSON Finaxys et recherche RAG.",
