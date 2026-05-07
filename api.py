@@ -11,6 +11,7 @@ from uuid import uuid4
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import APIKeyHeader
+from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from schemas.models import CVData
@@ -41,6 +42,10 @@ load_dotenv()
 # Configuration du logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Observabilité Langfuse (optionnel — no-op si clés absentes)
+from outils.langfuse_client import init_langfuse, trace_cv_analysis, trace_rag_search
+init_langfuse()
 
 def _parse_cors_origins() -> list[str]:
     raw = os.getenv("CORS_ALLOW_ORIGINS", "").strip()
@@ -100,20 +105,6 @@ MAX_CONCURRENT_JOBS = int(os.getenv("MAX_CONCURRENT_JOBS", "2"))
 if MAX_CONCURRENT_JOBS < 0:
     MAX_CONCURRENT_JOBS = 0
 JOB_SEMAPHORE = threading.BoundedSemaphore(MAX_CONCURRENT_JOBS or 1)
-
-
-def _parse_cors_origins() -> list[str]:
-    raw = os.getenv("CORS_ALLOW_ORIGINS", "").strip()
-    if not raw:
-        return []
-    return [item.strip() for item in raw.split(",") if item.strip()]
-
-
-def _cors_allow_credentials(origins: list[str]) -> bool:
-    want = os.getenv("CORS_ALLOW_CREDENTIALS", "false").lower() == "true"
-    if "*" in origins:
-        return False
-    return want
 
 
 def _normalize_upload_filename(filename: str) -> str:
@@ -384,6 +375,7 @@ async def analyze_cv(
 
     _enforce_upload_size(request)
     _acquire_job_slot()
+    _t_start = time.time()
     temp_path = _prepare_temp_upload_path(file.filename)
     try:
         _save_upload_file(file, temp_path)
@@ -410,6 +402,7 @@ async def analyze_cv(
             _upload_outputs_to_s3(cv_data, temp_path.stem, generate_word)
         
         # Indexation RAG automatique
+        rag_indexed = False
         if index:
             try:
                 from schemas.models import CVData as CVDataModel
@@ -417,8 +410,16 @@ async def analyze_cv(
                 cv_obj = CVDataModel(**cv_data) if isinstance(cv_data, dict) else cv_data
                 vdb.add_cv(cv_obj, file.filename)
                 logger.info("CV indexÃ© dans le RAG : %s", file.filename)
+                rag_indexed = True
             except Exception as e:
                 logger.error("Erreur indexation RAG : %s", e)
+
+        # Trace Langfuse
+        trace_cv_analysis(
+            file.filename, cv_data,
+            latency_ms=round((time.time() - _t_start) * 1000, 1),
+            indexed=rag_indexed,
+        )
 
         return cv_data
 
@@ -537,7 +538,83 @@ async def search_candidates(query: str, results: int = 3):
     except Exception as e:
         _internal_error("Erreur recherche RAG", e)
 
-@app.get("/analyze-wait", dependencies=[Depends(require_api_key), Depends(enforce_rate_limit)])
+
+@app.get("/search/job", dependencies=[Depends(require_api_key), Depends(enforce_rate_limit)])
+async def search_by_job_title(jobTitle: str, results: int = 5):
+    """
+    Recherche de candidats par intitulé de poste.
+    Enrichit la requête via le référentiel YAML (required_skills),
+    puis calcule le skill gap pour chaque candidat trouvé.
+    """
+    from outils.job_referentiel import resolve_poste, build_enriched_query, compute_skill_gap
+
+    logger.info("Recherche par poste reçue : %s", jobTitle)
+
+    _t0 = time.time()
+    poste = resolve_poste(jobTitle)
+    required_skills: list[str] = poste.get("required_skills", []) if poste else []
+    enriched_query = build_enriched_query(jobTitle, poste)
+
+    try:
+        vdb = VectorStoreManager()
+        search_results = vdb.search(enriched_query, n_results=results)
+
+        if not search_results or not search_results["documents"][0]:
+            return {
+                "jobTitle": jobTitle,
+                "requiredSkills": required_skills,
+                "knownPoste": poste is not None,
+                "candidates": [],
+            }
+
+        candidates = []
+        docs = search_results["documents"][0]
+        metas = search_results["metadatas"][0]
+        distances = search_results.get("distances", [[]])[0]
+
+        for i, doc in enumerate(docs):
+            meta = metas[i]
+            matched, missing = compute_skill_gap(required_skills, doc)
+            coverage = round(len(matched) / len(required_skills), 2) if required_skills else 1.0
+            # ChromaDB retourne une distance L2 — on la convertit en score de similarité [0,1]
+            dist = distances[i] if i < len(distances) else 1.0
+            relevance = round(max(0.0, 1.0 - dist / 2.0), 3)
+
+            candidates.append({
+                "candidateId": meta.get("source", f"candidat_{i+1}"),
+                "name": f"{meta.get('prenom', '')} {meta.get('nom', '')}".strip() or "Inconnu",
+                "jobTitle": meta.get("titre", ""),
+                "matchedSkills": matched,
+                "missingSkills": missing,
+                "coverageScore": coverage,
+                "relevanceScore": relevance,
+            })
+
+        # Trier par couverture décroissante, puis pertinence
+        candidates.sort(key=lambda c: (-c["coverageScore"], -c["relevanceScore"]))
+
+        avg_relevance = round(sum(c["relevanceScore"] for c in candidates) / len(candidates), 3) if candidates else 0.0
+        latency = round((time.time() - _t0) * 1000, 1)
+
+        # Trace Langfuse
+        trace_rag_search(
+            query=enriched_query,
+            job_title=jobTitle,
+            candidates=candidates,
+            required_skills=required_skills,
+            context_relevance=avg_relevance,
+            latency_ms=latency,
+        )
+
+        return {
+            "jobTitle": jobTitle,
+            "requiredSkills": required_skills,
+            "knownPoste": poste is not None,
+            "candidates": candidates,
+        }
+
+    except Exception as e:
+        _internal_error("Erreur recherche par poste", e)
 async def analyze_wait(filename: str, generate_word: bool = True, index: bool = False, timeout: int = 90):
     """
     DÃ©clenche l'analyse et attend le rÃ©sultat complet (bloquant, max timeout secondes).
@@ -753,6 +830,49 @@ async def get_result(filename: Optional[str] = None, job_id: Optional[str] = Non
     if isinstance(result, dict) and result.get("error"):
         raise HTTPException(status_code=500, detail=result.get("error"))
     return result
+
+
+class MatchSkillsRequest(BaseModel):
+    skills_cv: list[str]
+    skills_ref: list[str]
+
+
+class MatchSkillsItem(BaseModel):
+    skill_cv: str
+    skill_ref: Optional[str]
+    score: float
+    match_type: str  # EXACT | FUZZY | NO_MATCH
+
+
+@app.post(
+    "/match-skills",
+    response_model=list[MatchSkillsItem],
+    dependencies=[Depends(require_api_key)],
+)
+async def match_skills_endpoint(body: MatchSkillsRequest):
+    """
+    Compare les compétences du CV avec le référentiel RH.
+    Retourne pour chaque skill CV la meilleure correspondance trouvée (T2).
+    """
+    if not body.skills_cv:
+        raise HTTPException(status_code=422, detail="skills_cv ne peut pas être vide.")
+    if not body.skills_ref:
+        raise HTTPException(status_code=422, detail="skills_ref ne peut pas être vide.")
+
+    try:
+        from outils.skill_matcher import match_skills
+        results = match_skills(body.skills_cv, body.skills_ref)
+        return [
+            MatchSkillsItem(
+                skill_cv=r.skill_cv,
+                skill_ref=r.skill_ref,
+                score=r.score,
+                match_type=r.match_type,
+            )
+            for r in results
+        ]
+    except Exception as e:
+        _internal_error("Erreur matching compétences", e)
 
 
 if __name__ == "__main__":

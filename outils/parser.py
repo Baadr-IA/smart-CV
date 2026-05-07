@@ -18,6 +18,7 @@ from pathlib import Path
 from pypdf import PdfReader
 from docx import Document
 from openai import OpenAI
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -477,12 +478,28 @@ def _ocr_pdf(file_path: Path) -> str:
         # Sauvegarde de l'image binarisée pour debug
         debug_path = debug_dir / f"{file_path.stem}_p{page_num+1}_bin.png"
         img.save(debug_path)
-        logger.info(f"Image binarisée sauvegardée : {debug_path}")
         
-        # OCR via pytesseract
-        text = pytesseract.image_to_string(img, lang="fra+eng")
-        pages_text.append(text)
-        logger.debug("OCR page %d (nettoyée) : %d caractères", page_num + 1, len(text))
+        # --- PHASE 4 : SEGMENTATION & OCR ---
+        # Au lieu de lire toute la page, on détecte les blocs pour respecter l'ordre (colonnes)
+        from outils.image_processor import get_text_blocks
+        blocks = get_text_blocks(img)
+        
+        if not blocks:
+            # Fallback si aucun bloc détecté
+            text = pytesseract.image_to_string(img, lang="fra+eng", config="--psm 1")
+            pages_text.append(text)
+        else:
+            page_content = []
+            img_np = np.array(img)
+            for (x, y, w, h) in blocks:
+                # Extraire la zone du bloc
+                roi = img_np[y:y+h, x:x+w]
+                # OCR sur le bloc uniquement (PSM 6 : bloc de texte uniforme)
+                block_text = pytesseract.image_to_string(roi, lang="fra+eng", config="--psm 6")
+                page_content.append(block_text.strip())
+            
+            pages_text.append("\n\n".join(page_content))
+            logger.info("OCR page %d : %d blocs détectés", page_num + 1, len(blocks))
     
     doc.close()
     return "\n".join(pages_text)

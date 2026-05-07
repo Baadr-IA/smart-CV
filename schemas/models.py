@@ -27,7 +27,8 @@ class Competence(BaseModel):
     nom: str
     categorie: Optional[str] = "Général"
     niveau: Optional[str] = "Intermédiaire"
-    annees_experience: Optional[int] = None
+    annees_experience: Optional[float] = None
+    aliases_experiences: List[str] = Field(default_factory=list)
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     justification: Optional[str] = None
 

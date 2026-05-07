@@ -1,0 +1,124 @@
+postes:
+  devops:
+    label: DevOps Engineer
+    aliases: [DevOps, DevOps Engineer, Ingénieur DevOps, SRE, Site Reliability Engineer, Platform Engineer]
+    required_skills:
+      - Docker
+      - Kubernetes
+      - Terraform
+      - CI/CD
+      - Jenkins
+      - GitLab CI
+      - AWS
+      - Linux
+      - Ansible
+      - Helm
+      - Prometheus
+      - Grafana
+
+  backend_java:
+    label: Backend Java
+    aliases: [Backend Java, Développeur Java, Java Developer, Java Backend, Ingénieur Java, Java EE, Jakarta EE]
+    required_skills:
+      - Java
+      - Spring Boot
+      - Spring Framework
+      - JPA
+      - Hibernate
+      - REST API
+      - Maven
+      - Gradle
+      - JUnit
+      - Mockito
+      - Microservices
+
+  data_engineer:
+    label: Data Engineer
+    aliases: [Data Engineer, Ingénieur Data, Ingénieur Données, Data Pipeline, ETL Developer]
+    required_skills:
+      - Python
+      - Spark
+      - Kafka
+      - Airflow
+      - SQL
+      - dbt
+      - BigQuery
+      - Snowflake
+      - Databricks
+      - ETL
+      - Hadoop
+
+  cloud_engineer:
+    label: Cloud Engineer
+    aliases: [Cloud Engineer, Ingénieur Cloud, Cloud Architect, Architecte Cloud, AWS Engineer, Azure Engineer, GCP Engineer]
+    required_skills:
+      - AWS
+      - Azure
+      - GCP
+      - Terraform
+      - CloudFormation
+      - Kubernetes
+      - Docker
+      - IAM
+      - VPC
+      - Lambda
+      - EC2
+
+  scrum_master:
+    label: Scrum Master
+    aliases: [Scrum Master, Agile Coach, Coach Agile, Product Owner, PO, Chef de Projet Agile]
+    required_skills:
+      - Scrum
+      - Agile
+      - Kanban
+      - Jira
+      - Confluence
+      - SAFe
+      - Facilitation
+      - Backlog
+      - Sprint
+      - Ceremonies
+
+  frontend:
+    label: Frontend Developer
+    aliases: [Frontend, Frontend Developer, Développeur Frontend, Développeur Front, UI Developer, React Developer, Angular Developer, Vue Developer]
+    required_skills:
+      - JavaScript
+      - TypeScript
+      - React
+      - Angular
+      - Vue.js
+      - HTML
+      - CSS
+      - REST API
+      - Jest
+      - Webpack
+
+  fullstack_java:
+    label: Fullstack Java
+    aliases: [Fullstack Java, Full Stack Java, Développeur Fullstack, Fullstack Developer]
+    required_skills:
+      - Java
+      - Spring Boot
+      - Angular
+      - React
+      - REST API
+      - JPA
+      - Docker
+      - SQL
+
+  architect:
+    label: Architecte Logiciel
+    aliases: [Architecte, Software Architect, Architecte Logiciel, Architecte Solution, Solution Architect, Architecte Technique]
+    required_skills:
+      - Architecture
+      - Microservices
+      - DDD
+      - Event-Driven
+      - API Design
+      - Cloud
+      - Docker
+      - Kubernetes
+      - Design Patterns
+      - Java
+      - SQL

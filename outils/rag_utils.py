@@ -60,10 +60,16 @@ class VectorStoreManager:
     def __init__(self, db_path: str = "./vector_db"):
         db_path = os.getenv("CHROMA_DB_PATH", db_path)
         self.client = chromadb.PersistentClient(path=db_path)
+        
+        logger.info("Chargement du modèle d'embedding local...")
         # On utilise un modèle d'embedding local gratuit (all-MiniLM-L6-v2)
         self.embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
             model_name="all-MiniLM-L6-v2"
         )
+        # On force un petit calcul pour charger le modèle en RAM tout de suite
+        self.embedding_fn(["warmup"])
+        logger.info("Modèle d'embedding chargé et prêt.")
+
         self.collection = self.client.get_or_create_collection(
             name="cv_collection",
             embedding_function=self.embedding_fn
