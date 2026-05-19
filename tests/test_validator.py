@@ -1,6 +1,5 @@
 """Tests de validation JSON."""
 
-import pytest
 from outils.validator import validate_structure
 
 
@@ -15,7 +14,6 @@ VALID_CV = {
         {
             "titre": "Développeur Senior",
             "entreprise": "Finaxys",
-            "client": None,
             "date_debut": "2020-01",
             "date_fin": None,
             "en_cours": True,
@@ -44,10 +42,6 @@ class TestStructuralValidation:
         errors = validate_structure(VALID_CV)
         assert errors == []
 
-    @pytest.mark.skip(
-        reason="cv_finaxys.json est un template de données, pas un JSON Schema formalisé. "
-               "La validation de champs requis sera activée quand le schéma sera migré vers Draft-07."
-    )
     def test_missing_required_field(self):
         cv = {**VALID_CV}
         del cv["identite"]
@@ -55,10 +49,6 @@ class TestStructuralValidation:
         assert len(errors) > 0
         assert any("identite" in e for e in errors)
 
-    @pytest.mark.skip(
-        reason="La validation de format de date nécessite un JSON Schema avec pattern/format. "
-               "À implémenter quand le schéma sera formalisé."
-    )
     def test_invalid_date_format(self):
         cv = {**VALID_CV, "experiences": [{
             "titre": "Dev",
@@ -70,3 +60,4 @@ class TestStructuralValidation:
         }]}
         errors = validate_structure(cv)
         assert len(errors) > 0
+        assert any("date_debut" in e for e in errors)

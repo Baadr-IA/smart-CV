@@ -14,6 +14,8 @@ import os
 import logging
 from typing import Optional, Any
 
+from outils.metrics import set_langfuse_enabled
+
 logger = logging.getLogger("langfuse_client")
 
 _langfuse: Optional[Any] = None
@@ -27,16 +29,20 @@ def init_langfuse():
     host = os.getenv("LANGFUSE_HOST", "http://localhost:3000")
     if not secret or not public:
         logger.info("Langfuse desactive (cles manquantes)")
+        set_langfuse_enabled(False)
         return
     try:
         from langfuse import Langfuse
         _langfuse = Langfuse(secret_key=secret, public_key=public, host=host)
         _enabled = True
         logger.info("Langfuse initialise -> %s", host)
+        set_langfuse_enabled(True)
     except ImportError:
         logger.warning("Package langfuse non installe")
+        set_langfuse_enabled(False)
     except Exception as e:
         logger.warning("Langfuse init echoue : %s", e)
+        set_langfuse_enabled(False)
 
 
 def is_enabled() -> bool:

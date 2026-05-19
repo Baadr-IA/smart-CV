@@ -23,6 +23,18 @@ def _normalize(text: str) -> str:
     return "".join(c for c in nfkd if not unicodedata.combining(c)).strip()
 
 
+def _dedupe_keep_order(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        normalized = _normalize(value)
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(value.strip())
+    return result
+
+
 @lru_cache(maxsize=1)
 def _load_referentiel() -> dict:
     try:
@@ -96,3 +108,27 @@ def compute_skill_gap(
         else:
             missing.append(skill)
     return matched, missing
+
+
+def build_prefilter_terms(
+    job_title: str,
+    poste: Optional[dict],
+    *,
+    max_aliases: int = 4,
+    max_skills: int = 8,
+) -> list[str]:
+    """
+    Construit une liste courte de termes métier pour le préfiltrage SQL et
+    la recherche lexicale hybride.
+    """
+    terms = [job_title]
+    if poste is None:
+        return _dedupe_keep_order(terms)
+
+    label = poste.get("label")
+    if label:
+        terms.append(label)
+
+    terms.extend(poste.get("aliases", [])[:max_aliases])
+    terms.extend(poste.get("required_skills", [])[:max_skills])
+    return _dedupe_keep_order([term for term in terms if term])

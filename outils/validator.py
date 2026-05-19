@@ -9,6 +9,7 @@ import logging
 from pathlib import Path
 
 import jsonschema
+from jsonschema.validators import validator_for
 
 from outils.prompt_loader import load_instruction_prompt_by_name
 
@@ -26,7 +27,9 @@ def load_schema() -> dict:
 def validate_structure(cv_data: dict) -> list[str]:
     """Valide le JSON contre le schéma jsonschema. Retourne la liste d'erreurs."""
     schema = load_schema()
-    validator = jsonschema.Draft7Validator(schema)
+    validator_cls = validator_for(schema)
+    validator_cls.check_schema(schema)
+    validator = validator_cls(schema, format_checker=jsonschema.FormatChecker())
     errors = []
     for error in sorted(validator.iter_errors(cv_data), key=lambda e: list(e.path)):
         path = " → ".join(str(p) for p in error.path) or "(racine)"
@@ -73,6 +76,7 @@ def validate_semantic(cv_data: dict, client, provider: str) -> dict:
         client, provider, SEMANTIC_PROMPT,
         json.dumps(cv_data, ensure_ascii=False, indent=2),
         max_tokens=1024,
+        operation="cv_validate_semantic",
     )
 
     cleaned = raw.strip()

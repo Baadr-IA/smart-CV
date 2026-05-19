@@ -1,0 +1,29 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+extend-exclude = [
+  ".git",
+  ".venv",
+  ".claude",
+  "__pycache__",
+  "bench_output",
+  "bench_output_metrics",
+  "debug_ocr",
+  "debug_preprocessing_compare",
+  "debug_preprocessing_compare_v2",
+  "debug_text_comparison",
+  "graphify-out",
+  "input",
+  "logs",
+  "output",
+  "temp_api",
+  "temp_unpack",
+]
+
+[tool.ruff.lint]
+select = ["F"]

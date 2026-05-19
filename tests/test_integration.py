@@ -1,6 +1,4 @@
 import pytest
-import json
-from pathlib import Path
 from schemas.models import CVData
 
 def test_full_pipeline_mock(tmp_path):
@@ -27,11 +25,22 @@ def test_full_pipeline_mock(tmp_path):
                 "missions": ["Développement de pipelines RAG"]
             }
         ],
+        "projets_academiques": [
+            {
+                "nom": "Matching de CV",
+                "etablissement": "ENSEIRB",
+                "equipe": "Binôme",
+                "duree": "5 mois",
+                "missions": ["A conçu un moteur de matching"],
+                "technologies": ["Python", "FastAPI"]
+            }
+        ],
         "formations": [],
         "langues": [],
         "metadata": {
             "date_extraction": "2026-03-16T12:00:00Z",
-            "source_fichier": "test.pdf"
+            "source_fichier": "test.pdf",
+            "parsing_method": "pypdf"
         }
     }
 
@@ -46,13 +55,27 @@ def test_full_pipeline_mock(tmp_path):
     
     reloaded_data = CVData.model_validate_json(output_file.read_text(encoding="utf-8"))
     assert reloaded_data.identite.prenom == "John"
+    assert reloaded_data.projets_academiques[0].nom == "Matching de CV"
+    assert reloaded_data.metadata.parsing_method == "pypdf"
 
 def test_pydantic_validation_error():
     """Vérifie que Pydantic détecte bien les données invalides."""
     bad_data = {
-        "identite": {"nom": "Doe"}, # Manque le prénom obligatoire
         "metadata": {"date_extraction": "now", "source_fichier": "test.pdf"}
     }
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
         CVData(**bad_data)
+
+
+def test_backward_compatible_metadata_alias():
+    """L'ancien nom method_parsing doit rester accepté en lecture."""
+    cv = CVData(**{
+        "identite": {"nom": "Doe"},
+        "metadata": {
+            "source_fichier": "test.pdf",
+            "method_parsing": "pypdf",
+        },
+    })
+
+    assert cv.metadata.parsing_method == "pypdf"

@@ -62,7 +62,14 @@ def normalize_style(cv_data: dict, client, provider: str) -> dict:
                 cv_data.get("identite", {}).get("nom", "inconnu"))
 
     user_message = f"JSON du CV à normaliser :\n{json.dumps(cv_data, ensure_ascii=False, indent=2)}"
-    raw = llm_call(client, provider, SYSTEM_PROMPT, user_message, max_tokens=4096)
+    raw = llm_call(
+        client,
+        provider,
+        SYSTEM_PROMPT,
+        user_message,
+        max_tokens=4096,
+        operation="cv_normalize",
+    )
     cleaned = _clean_json_response(raw)
 
     try:
@@ -73,7 +80,17 @@ def normalize_style(cv_data: dict, client, provider: str) -> dict:
 
     # Defensive merge: if the LLM dropped 'metadata' (or any other structural key),
     # restore it from the original data so the pipeline never crashes with KeyError.
-    for key in ("metadata", "identite", "competences", "experiences", "formations", "langues"):
+    for key in (
+        "metadata",
+        "identite",
+        "competences",
+        "experiences",
+        "projets_academiques",
+        "formations",
+        "certifications",
+        "langues",
+        "centres_interet",
+    ):
         if key not in normalized and key in cv_data:
             logger.warning("normalize_style: LLM dropped key '%s' — restoring from original.", key)
             normalized[key] = cv_data[key]

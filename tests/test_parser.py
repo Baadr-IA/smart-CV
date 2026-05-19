@@ -47,6 +47,7 @@ class TestTextQuality:
         metrics = _compute_text_quality("Bonjour le monde 2026")
         assert metrics["char_count"] > 0
         assert metrics["word_count"] == 4
+        assert metrics["words_per_page"] >= 4
         assert 0.0 <= metrics["alpha_ratio"] <= 1.0
 
     def test_is_quality_sufficient_true(self):
@@ -54,6 +55,30 @@ class TestTextQuality:
 
     def test_is_quality_sufficient_false(self):
         assert not _is_quality_sufficient({"char_count": 50, "alpha_ratio": 0.4})
+
+    def test_is_quality_sufficient_composite_true(self):
+        assert _is_quality_sufficient(
+            {
+                "char_count": 300,
+                "alpha_ratio": 0.9,
+                "word_count": 60,
+                "words_per_page": 30,
+                "chars_per_page": 300,
+                "anchor_hits": 2,
+            }
+        )
+
+    def test_is_quality_sufficient_composite_false(self):
+        assert not _is_quality_sufficient(
+            {
+                "char_count": 300,
+                "alpha_ratio": 0.9,
+                "word_count": 4,
+                "words_per_page": 4,
+                "chars_per_page": 20,
+                "anchor_hits": 0,
+            }
+        )
 
 
 class TestParseFile:

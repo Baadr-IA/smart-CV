@@ -12,7 +12,7 @@ Usage :
 import json
 import logging
 import sys
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -168,7 +168,7 @@ def process(file_path, output_dir, skip_word, index):
             # On reconvertit en objet Pydantic pour la sécurité
             cv_obj = CVData(**cv_data)
             vdb.add_cv(cv_obj, file_path.name)
-            click.echo(f"[RAG] CV indexé dans ChromaDB (ID: {file_path.name})")
+            click.echo(f"[RAG] CV indexé dans PostgreSQL/pgvector (ID: {file_path.name})")
         except Exception as e:
             logger.error("Erreur lors de l'indexation RAG : %s", e)
             click.echo(f"[ERR] Échec de l'indexation : {e}")
@@ -233,6 +233,7 @@ def test_api():
             system_prompt="Tu es un assistant.",
             user_message="Réponds uniquement 'OK' si tu reçois ce message.",
             max_tokens=20,
+            operation="cli_test_api",
         )
         click.echo(f"[OK] Connexion réussie ! Réponse : {response.strip()}")
     except Exception as e:

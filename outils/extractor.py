@@ -35,8 +35,17 @@ STRUCTURE JSON REQUISE :
       "missions": ["string"], "technologies": ["string"], "resultats": ["string"]
     }
   ],
+  "projets_academiques": [
+    {
+      "nom": "string", "etablissement": "string|null", "equipe": "string|int|null",
+      "duree": "string|null", "missions": ["string"], "technologies": ["string"]
+    }
+  ],
   "formations": [
     { "diplome": "string", "etablissement": "string", "annee": int|null }
+  ],
+  "certifications": [
+    { "nom": "string", "organisme": "string|null", "annee": "string|int|null", "score": "string|null" }
   ],
   "langues": [
     { "langue": "string", "niveau": "string", "certification": "string|null" }
@@ -71,16 +80,10 @@ def _clean_json_response(raw: str) -> str:
         cleaned = "\n".join(lines)
     return cleaned
 
-
-import json
-import logging
 from datetime import datetime, timezone
 from pydantic import ValidationError
 
-from outils.prompt_loader import load_instruction_prompt_by_name
 from schemas.models import CVData
-
-logger = logging.getLogger(__name__)
 
 
 def extract_cv_to_json(
@@ -99,7 +102,14 @@ def extract_cv_to_json(
         f"--- TEXTE DU CV ---\n{text}\n--- FIN DU TEXTE ---"
     )
 
-    raw_response = llm_call(client, provider, SYSTEM_PROMPT, user_message, max_tokens=4096)
+    raw_response = llm_call(
+        client,
+        provider,
+        SYSTEM_PROMPT,
+        user_message,
+        max_tokens=4096,
+        operation="cv_extract",
+    )
     cleaned = _clean_json_response(raw_response)
 
     try:

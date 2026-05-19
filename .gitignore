@@ -1,6 +1,5 @@
 # Env
 .env
-
 # Python
 __pycache__/
 *.pyc
@@ -31,15 +30,26 @@ temp_unpack/
 vector_db/
 
 # OpenClaw Docker (Secrets et sessions)
-openclaw_docker/agents/*/sessions/
-openclaw_docker/memory/
-openclaw_docker/identity/
-openclaw_docker/devices/
-openclaw_docker/telegram/*.txt
-openclaw_docker/logs/
-openclaw_docker/*.log
-openclaw_docker/*.bak*
-openclaw_docker/update-check.json
+openclaw_docker/
 
 # Tesseract
 *.traineddata
+
+# Fichiers locaux non nécessaires au CI
+ARCHITECTURE_FINALE.md
+Dockerfile.bot
+
+# Debug & Benchmark (fichiers locaux)
+debug_ocr/
+debug_preprocessing_compare/
+debug_preprocessing_compare_v2/
+debug_text_comparison/
+bench_output/
+bench_output_metrics/
+graphify-out/
+debug_*.txt
+debug_*.png
+view_*.png
+view_*.md
+DUMP_RESULTATS_TEXTE/
+DUMP_RESULTATS_F1/

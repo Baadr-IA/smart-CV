@@ -1,6 +1,6 @@
 """
 Bot Telegram pour l'analyse de CV Finaxys.
-Remplace OpenClaw — utilise directement les modules du projet.
+Utilise directement les modules du projet.
 
 Commandes :
   /start         → message de bienvenue
@@ -11,6 +11,7 @@ Commandes :
 
 import logging
 import os
+import time
 from pathlib import Path
 from uuid import uuid4
 
@@ -25,7 +26,9 @@ from telegram.ext import (
 )
 
 from service import process_cv_pipeline
+from outils.metrics import observe_cv_stage, observe_llm_eval, push_bot_metrics
 from outils.rag_utils import VectorStoreManager
+from outils.langfuse_client import init_langfuse, trace_cv_analysis, flush as langfuse_flush
 from outils.fs_utils import sanitize_client_filename, ensure_extension
 from schemas.models import CVData as CVDataModel
 
@@ -44,6 +47,15 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 ALLOWED_EXTENSIONS = {".pdf", ".docx"}
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
+
+# Singleton VectorStoreManager — chargé une seule fois au démarrage
+_vdb: VectorStoreManager | None = None
+
+def get_vdb() -> VectorStoreManager:
+    global _vdb
+    if _vdb is None:
+        _vdb = VectorStoreManager()
+    return _vdb
 
 
 def _parse_allowed_chat_ids() -> set[int]:
@@ -93,7 +105,7 @@ def _format_cv_summary(cv: dict) -> str:
     telephone = identite.get("telephone", "")
     localisation = identite.get("localisation", "")
 
-    lines.append(f"✅ *Analyse terminée !*\n")
+    lines.append("✅ *Analyse terminée !*\n")
     lines.append(f"👤 *{prenom} {nom}*" + (f" — {titre}" if titre else ""))
     if email:
         lines.append(f"📧 {email}")
@@ -209,7 +221,7 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
 
     await update.message.reply_text("🔍 Recherche en cours...")
     try:
-        vdb = VectorStoreManager()
+        vdb = get_vdb()
         results = vdb.search(query, n_results=3)
 
         if not results or not results["documents"][0]:
@@ -231,7 +243,7 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         user_msg = f"Recherche RH: {query}\n\nProfils trouvés:\n" + "\n---\n".join(context_parts)
 
         client, provider = create_client()
-        answer = llm_call(client, provider, system_prompt, user_msg)
+        answer = llm_call(client, provider, system_prompt, user_msg, operation="telegram_rag_answer")
 
         sources = [m.get("source", "") for m in results["metadatas"][0]]
         sources_str = "\n".join(f"  • {s}" for s in sources if s)
@@ -241,9 +253,53 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
             parse_mode="Markdown",
         )
 
-    except Exception as e:
+    except Exception:
         logger.exception("Erreur recherche RAG")
         await update.message.reply_text("❌ Erreur lors de la recherche. Réessaie plus tard.")
+
+
+def _push_llm_eval_metrics(cv_data: dict, source: str, pipeline_start: float) -> None:
+    """Extrait les scores d'évaluation LLM du cv_data et les pousse vers le Pushgateway."""
+    try:
+        import os
+        metadata = cv_data.get("metadata", {})
+        identite = cv_data.get("identite", {})
+        validation = cv_data.get("validation", {})
+
+        completude = float(metadata.get("score_completude", 0.0))
+        semantic_score = float(metadata.get("score_semantique", validation.get("score_semantique", 0.0)))
+        structural_ok = bool(validation.get("structurelle_ok", True))
+        semantic_ok = bool(validation.get("semantique_ok", True))
+
+        # Champs clés : nom, prénom, email, téléphone, résumé, compétences, expériences
+        key_fields = [
+            identite.get("nom", ""),
+            identite.get("prenom", ""),
+            identite.get("email", ""),
+            identite.get("telephone", ""),
+            cv_data.get("resume", "") or cv_data.get("profil", ""),
+            cv_data.get("competences", []),
+            cv_data.get("experiences", []),
+        ]
+        fields_filled = sum(1 for f in key_fields if f)
+
+        model = os.getenv("OPENAI_MODEL", "gpt-4o")
+        pipeline_latency_ms = (time.perf_counter() - pipeline_start) * 1000.0
+
+        observe_llm_eval(
+            source=source,
+            model=model,
+            completude_score=completude,
+            semantic_score=semantic_score,
+            structural_ok=structural_ok,
+            semantic_ok=semantic_ok,
+            fields_filled=fields_filled,
+            pipeline_latency_ms=pipeline_latency_ms,
+        )
+        pushgateway = os.getenv("PUSHGATEWAY_URL", "http://smartcv-pushgateway:9091")
+        push_bot_metrics(pushgateway_url=pushgateway)
+    except Exception as e:
+        logger.warning("_push_llm_eval_metrics échoué (non bloquant) : %s", e)
 
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -270,6 +326,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         return
 
     temp_path = TEMP_DIR / f"{uuid4().hex}_{safe_name}"
+    pipeline_start = time.perf_counter()
 
     status_msg = await update.message.reply_text(
         f"⏳ Analyse de *{safe_name}* en cours...\n"
@@ -288,16 +345,43 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             file_path=temp_path,
             output_dir=OUTPUT_DIR,
             generate_word_doc=True,
+            source="telegram",
         )
 
         # Indexation RAG automatique (silencieuse)
+        index_start = time.perf_counter()
+        indexed = False
         try:
-            vdb = VectorStoreManager()
+            vdb = get_vdb()
             cv_obj = CVDataModel(**cv_data)
-            vdb.add_cv(cv_obj, safe_name)
+            vdb.add_cv(cv_obj, safe_name, index_source="telegram")
+            indexed = True
             logger.info("CV indexé dans le RAG : %s", safe_name)
+            observe_cv_stage(
+                stage="index",
+                status="success",
+                latency_ms=round((time.perf_counter() - index_start) * 1000, 1),
+            )
         except Exception:
+            observe_cv_stage(
+                stage="index",
+                status="error",
+                latency_ms=round((time.perf_counter() - index_start) * 1000, 1),
+                error_type="bot_index_error",
+            )
             logger.warning("Indexation RAG échouée pour %s (non bloquant)", safe_name)
+
+        # Trace Langfuse
+        trace_cv_analysis(
+            filename=safe_name,
+            cv_data=cv_data,
+            latency_ms=round((time.perf_counter() - pipeline_start) * 1000, 1),
+            indexed=indexed,
+        )
+        langfuse_flush()
+
+        # Métriques d'évaluation LLM → Pushgateway
+        _push_llm_eval_metrics(cv_data, source="telegram", pipeline_start=pipeline_start)
 
         # Envoyer le résumé texte
         summary = _format_cv_summary(cv_data)
@@ -351,6 +435,14 @@ def main() -> None:
         raise RuntimeError("TELEGRAM_BOT_TOKEN manquant dans les variables d'environnement.")
 
     logger.info("Démarrage du bot Telegram Finaxys...")
+
+    # Initialisation Langfuse (traces LLM)
+    init_langfuse()
+
+    # Pré-chargement du modèle d'embedding au démarrage(évite le délai à la 1ère requête)
+    logger.info("Chargement du modèle d'embedding RAG...")
+    get_vdb()
+    logger.info("Modèle d'embedding prêt.")
 
     app = Application.builder().token(token).build()
 

@@ -100,7 +100,14 @@ def classify_skills(cv_data: dict, client, provider: str) -> list[dict]:
     logger.info("Classification de %d compétences + %d technologies",
                 len(competences_brutes), len(techs_uniques))
 
-    raw = llm_call(client, provider, SYSTEM_PROMPT, user_content, max_tokens=2048)
+    raw = llm_call(
+        client,
+        provider,
+        SYSTEM_PROMPT,
+        user_content,
+        max_tokens=2048,
+        operation="cv_classify_skills",
+    )
     cleaned = _clean_json_response(raw)
 
     try:
@@ -108,6 +115,20 @@ def classify_skills(cv_data: dict, client, provider: str) -> list[dict]:
     except json.JSONDecodeError as e:
         logger.error("JSON invalide pour classification : %s", e)
         raise ValueError(f"Classification a retourné un JSON invalide : {e}")
+
+    if not isinstance(classified, list):
+        raise ValueError("Classification invalide : un tableau JSON est attendu.")
+
+    normalized_skills: list[dict] = []
+    for item in classified:
+        if isinstance(item, str):
+            normalized_skills.append({"nom": item})
+        elif isinstance(item, dict):
+            normalized_skills.append(item)
+        else:
+            raise ValueError("Classification invalide : chaque compétence doit être un objet JSON.")
+
+    classified = normalized_skills
 
     _inject_calculated_years(classified, experiences)
 

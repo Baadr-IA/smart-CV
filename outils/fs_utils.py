@@ -17,7 +17,14 @@ def sanitize_client_filename(filename: str, *, max_length: int = 255) -> str:
     if len(filename) > max_length:
         raise ValueError("Nom de fichier trop long.")
 
-    name = Path(filename).name.strip()
+    raw_name = filename.strip()
+    if "/" in raw_name or "\\" in raw_name:
+        raise ValueError("Nom de fichier invalide.")
+
+    name = Path(raw_name).name.strip()
+    if name != raw_name:
+        raise ValueError("Nom de fichier invalide.")
+
     if not name or name in {".", ".."}:
         raise ValueError("Nom de fichier invalide.")
 

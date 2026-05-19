@@ -1,4 +1,22 @@
 services:
+  pgvector:
+    image: pgvector/pgvector:pg16
+    container_name: cv-finaxys-pgvector
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: smartcv
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgvector_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d smartcv"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: always
+
   # L'API Python (Le Cerveau)
   cv-api:
     build:
@@ -10,12 +28,15 @@ services:
       - "8000:8000"
     volumes:
       - ./output:/app/output
-      - ./vector_db:/app/vector_db
       - ./logs:/app/logs
       - ./input:/app/input
     environment:
       - DISABLE_DOCLING=1
+      - PGVECTOR_DSN=postgresql://postgres:postgres@pgvector:5432/smartcv
     env_file: .env
+    depends_on:
+      pgvector:
+        condition: service_healthy
     restart: always
 
   # Le Bot Telegram (Utilise la MÊME image que l'API)
@@ -25,12 +46,20 @@ services:
     command: python bot.py
     volumes:
       - ./output:/app/output
-      - ./vector_db:/app/vector_db
       - ./logs:/app/logs
       - ./input:/app/input
+      - hf_cache:/root/.cache/huggingface  # Cache modèles HuggingFace persistant
     environment:
       - DISABLE_HEALTHCHECK=true
+      - PGVECTOR_DSN=postgresql://postgres:postgres@pgvector:5432/smartcv
     env_file: .env
     depends_on:
-      - cv-api
+      cv-api:
+        condition: service_started
+      pgvector:
+        condition: service_healthy
     restart: always
+
+volumes:
+  pgvector_data:
+  hf_cache:  # Cache persistant pour les modèles HuggingFace (bge-m3, reranker)

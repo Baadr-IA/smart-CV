@@ -1,11 +1,12 @@
 """
 Parser de CVs : PDF (natif + scanné) et DOCX → texte propre.
 
-Stratégie :
-1. PDF        → OCR Vision via API (OpenAI-compatible)
-2. Fallback   → pypdf puis pytesseract OCR si nécessaire
-3. DOCX       → python-docx extraction paragraphes + tableaux
-4. Nettoyage  → suppression artefacts, normalisation espaces/sauts de ligne
+Stratégie par défaut :
+1. PDF        → pypdf
+2. Fallback   → pytesseract OCR
+3. Escalade   → OCR Vision OpenAI-compatible (ex: Qwen local)
+4. DOCX       → python-docx extraction paragraphes + tableaux
+5. Nettoyage  → suppression artefacts, normalisation espaces/sauts de ligne
 """
 
 import base64
@@ -22,11 +23,15 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Seuil : si pymupdf extrait moins de N caractères par page, on considère le PDF scanné
+# Seuils de qualité du texte extrait
 MIN_CHARS_PER_PAGE = int(os.getenv("MIN_CHARS_PER_PAGE", "30"))
 OCR_MIN_CHARS = int(os.getenv("OCR_MIN_CHARS", "200"))
+OCR_MIN_WORDS = int(os.getenv("OCR_MIN_WORDS", "40"))
 OCR_MIN_ALPHA_RATIO = float(os.getenv("OCR_MIN_ALPHA_RATIO", "0.60"))
-PDF_PARSE_MODE = os.getenv("PDF_PARSE_MODE", "docling").lower() # Changé en docling par défaut
+OCR_MIN_WORDS_PER_PAGE = int(os.getenv("OCR_MIN_WORDS_PER_PAGE", "20"))
+OCR_MIN_ANCHOR_HITS = int(os.getenv("OCR_MIN_ANCHOR_HITS", "1"))
+OCR_ENABLE_LLM_FALLBACK = os.getenv("OCR_ENABLE_LLM_FALLBACK", "true").lower() == "true"
+PDF_PARSE_MODE = os.getenv("PDF_PARSE_MODE", "smart").lower()
 LLM_VISION_MODEL = os.getenv("LLM_VISION_MODEL", "gpt-4o")
 
 
@@ -38,7 +43,7 @@ def parse_file(file_path: str | Path) -> dict:
         raise FileNotFoundError(f"Fichier introuvable : {file_path}")
 
     # CONFIGURATION
-    parse_mode = os.getenv("PDF_PARSE_MODE", "pypdf").lower() # On peut changer le défaut ici
+    parse_mode = os.getenv("PDF_PARSE_MODE", "smart").lower()
     suffix = file_path.suffix.lower()
     text = ""
     method = ""
@@ -53,18 +58,7 @@ def parse_file(file_path: str | Path) -> dict:
             if not _is_quality_sufficient(quality):
                 text = ""
 
-        # 1. Tenter d'abord l'extraction native (RAPIDE)
-        # Sauf si l'utilisateur a explicitement forcé un mode lourd
-        if parse_mode not in ["vision", "docling", "pymupdf-columns", "columns"]:
-            text, method = _parse_pdf_native(file_path)
-            quality = _compute_text_quality(text)
-            if _is_quality_sufficient(quality):
-                logger.info("Extraction native (pypdf) réussie et suffisante.")
-            else:
-                logger.info("Extraction native insuffisante (alpha_ratio=%.2f), passage aux fallbacks...", quality["alpha_ratio"])
-                text = "" # Reset pour déclencher le fallback
-
-        # 1bis. Mode auto : détecter colonnes et basculer
+        # 1. Mode auto/smart : extraction colonnes si layout 2 colonnes
         if not text and parse_mode in ["auto", "smart"]:
             if _is_two_columns_pdf(file_path):
                 logger.info("Colonnes détectées : extraction PyMuPDF (colonnes).")
@@ -73,8 +67,8 @@ def parse_file(file_path: str | Path) -> dict:
                 if not _is_quality_sufficient(quality):
                     text = ""
 
-        # 2. Tenter DOCLING (Idéal pour les scans structurés et tableaux)
-        if not text and not disable_docling:
+        # 2. Mode docling explicite seulement
+        if not text and parse_mode == "docling" and not disable_docling:
             try:
                 logger.info("Tentative de parsing via Docling : %s", file_path.name)
                 text = _parse_via_docling(file_path)
@@ -82,23 +76,14 @@ def parse_file(file_path: str | Path) -> dict:
                 if _is_quality_sufficient(quality):
                     method = "docling-markdown"
                 else:
-                    logger.warning("Docling a produit un texte de faible qualité. Tentative Vision...")
+                    logger.warning("Docling a produit un texte de faible qualité. Passage au pipeline OCR standard...")
                     text = ""
             except Exception as e:
-                logger.warning("Docling a échoué : %s. Tentative Vision...", e)
+                logger.warning("Docling a échoué : %s. Passage au pipeline OCR standard...", e)
 
-        # 3. Tenter VISION API (Le dernier recours intelligent)
+        # 3. Pipeline OCR standard : pypdf -> tesseract -> vision local/distant
         if not text:
-            try:
-                text = _ocr_pdf_via_api(file_path)
-                if text: method = "llm-vision-api"
-            except Exception as e:
-                logger.warning("Vision API a échoué : %s. Dernier recours Tesseract...", e)
-
-        # 4. Tenter TESSERACT (Le dernier recours local)
-        if not text:
-            text = _ocr_pdf(file_path)
-            method = "pytesseract-ocr"
+            text, method = _parse_pdf(file_path)
 
     # --- STRATÉGIE POUR LES DOCX ---
     elif suffix in (".docx", ".doc"):
@@ -268,24 +253,7 @@ def _parse_via_docling(file_path: Path) -> str:
 # ---------------------------------------------------------------------------
 
 def _parse_pdf(file_path: Path) -> tuple[str, str]:
-    """Extrait le texte d'un PDF en privilégiant l'OCR Vision via API."""
-    if PDF_PARSE_MODE in {"api", "api-vision", "vision"}:
-        try:
-            logger.info("Extraction PDF via API Vision...")
-            vision_text = _ocr_pdf_via_api(file_path)
-            vision_quality = _compute_text_quality(vision_text)
-            logger.info(
-                "Résultat API Vision : char_count=%d, alpha_ratio=%.2f",
-                vision_quality["char_count"],
-                vision_quality["alpha_ratio"],
-            )
-            if _is_quality_sufficient(vision_quality):
-                return vision_text, "llm-vision-api"
-            logger.warning("Qualité API Vision insuffisante, fallback local activé")
-        except Exception as e:
-            logger.warning("API Vision indisponible (%s), fallback local activé", e)
-
-    # Fallback local : pypdf natif puis OCR pytesseract
+    """Extrait le texte d'un PDF via pypdf -> pytesseract -> OCR Vision."""
     reader = PdfReader(str(file_path))
     pages_text = []
 
@@ -294,60 +262,107 @@ def _parse_pdf(file_path: Path) -> tuple[str, str]:
         pages_text.append(text)
 
     full_text = "\n".join(pages_text)
-    avg_chars = len(full_text.strip()) / max(len(pages_text), 1)
-    native_quality = _compute_text_quality(full_text)
+    page_count = max(len(pages_text), 1)
+    native_quality = _compute_text_quality(full_text, page_count=page_count)
 
-    if avg_chars >= MIN_CHARS_PER_PAGE and _is_quality_sufficient(native_quality):
+    if _is_quality_sufficient(native_quality):
         logger.info(
-            "PDF natif détecté (%d car/page en moyenne, alpha_ratio=%.2f)",
-            int(avg_chars),
+            "Extraction pypdf suffisante (%d car/page, %d mots/page, alpha_ratio=%.2f, anchors=%d)",
+            int(native_quality["chars_per_page"]),
+            int(native_quality["words_per_page"]),
             native_quality["alpha_ratio"],
+            native_quality["anchor_hits"],
         )
         return full_text, "pypdf"
 
-    # Fallback OCR
     logger.info(
-        "Texte natif insuffisant (%d car/page, alpha_ratio=%.2f). Tentative OCR pytesseract...",
-        int(avg_chars),
+        "Texte pypdf insuffisant (%d car/page, %d mots/page, alpha_ratio=%.2f). Tentative Tesseract...",
+        int(native_quality["chars_per_page"]),
+        int(native_quality["words_per_page"]),
         native_quality["alpha_ratio"],
     )
     ocr_text = _ocr_pdf(file_path)
-    ocr_quality = _compute_text_quality(ocr_text)
+    ocr_quality = _compute_text_quality(ocr_text, page_count=page_count)
     logger.info(
-        "Résultat OCR : char_count=%d, alpha_ratio=%.2f",
+        "Résultat Tesseract : char_count=%d, word_count=%d, alpha_ratio=%.2f, anchors=%d",
         ocr_quality["char_count"],
+        ocr_quality["word_count"],
         ocr_quality["alpha_ratio"],
+        ocr_quality["anchor_hits"],
     )
 
-    if _is_quality_sufficient(native_quality) and not _is_quality_sufficient(ocr_quality):
-        logger.warning("OCR de faible qualité, conservation du texte natif initial")
-        return full_text, "pypdf"
+    if _is_quality_sufficient(ocr_quality):
+        return ocr_text, "pytesseract-ocr"
 
-    return ocr_text, "pytesseract-ocr"
+    best_text, best_method, best_quality = _best_quality_candidate(
+        [
+            (full_text, "pypdf", native_quality),
+            (ocr_text, "pytesseract-ocr", ocr_quality),
+        ]
+    )
+
+    if PDF_PARSE_MODE in {"api", "api-vision", "vision", "smart", "auto", "qwen", "qwen-local"} and OCR_ENABLE_LLM_FALLBACK:
+        try:
+            logger.info("Qualité encore insuffisante après Tesseract. Tentative OCR Vision/Qwen...")
+            vision_text = _ocr_pdf_via_api(file_path)
+            vision_quality = _compute_text_quality(vision_text, page_count=page_count)
+            logger.info(
+                "Résultat Vision : char_count=%d, word_count=%d, alpha_ratio=%.2f, anchors=%d",
+                vision_quality["char_count"],
+                vision_quality["word_count"],
+                vision_quality["alpha_ratio"],
+                vision_quality["anchor_hits"],
+            )
+            if _is_quality_sufficient(vision_quality):
+                return vision_text, "llm-vision-api"
+            best_text, best_method, best_quality = _best_quality_candidate(
+                [
+                    (best_text, best_method, best_quality),
+                    (vision_text, "llm-vision-api", vision_quality),
+                ]
+            )
+        except Exception as e:
+            logger.warning("Vision API/Qwen indisponible (%s). Conservation du meilleur fallback local.", e)
+
+    logger.warning(
+        "Aucune extraction n'atteint le seuil cible; conservation de %s (score composite le plus élevé).",
+        best_method,
+    )
+    return best_text, best_method
 
 
 def _get_vision_client() -> tuple[OpenAI, str]:
     """Crée un client OpenAI-compatible pour l'OCR Vision."""
-    provider = os.getenv("LLM_PROVIDER", "copilot").lower()
+    provider = os.getenv("OCR_PROVIDER", os.getenv("LLM_PROVIDER", "copilot")).lower()
 
     if provider == "gemini":
         api_key = os.getenv("GEMINI_API_KEY", "")
         base_url = "https://generativelanguage.googleapis.com/v1beta/openai/"
         model = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+    elif provider == "openai":
+        api_key = os.getenv("OPENAI_API_KEY", "")
+        base_url = os.getenv("OPENAI_BASE_URL", "")
+        model = os.getenv("OPENAI_MODEL", LLM_VISION_MODEL)
     elif provider == "copilot":
         api_key = os.getenv("GITHUB_TOKEN", "")
         base_url = "https://models.inference.ai.azure.com"
         model = LLM_VISION_MODEL
+    elif provider in {"local_openai", "local", "openai-compatible", "openai_compatible", "qwen", "qwen-local"}:
+        api_key = os.getenv("LOCAL_LLM_API_KEY", "dummy")
+        base_url = os.getenv("LOCAL_LLM_BASE_URL", "").strip()
+        model = os.getenv("LOCAL_LLM_MODEL", LLM_VISION_MODEL)
     else:
-        # Fallback simple pour provider non vision-friendly dans ce parseur
-        api_key = os.getenv("GITHUB_TOKEN", "")
-        base_url = "https://models.inference.ai.azure.com"
-        model = LLM_VISION_MODEL
+        raise RuntimeError(f"OCR_PROVIDER/LLM_PROVIDER non supporté pour la vision : {provider}")
 
     if not api_key:
         raise RuntimeError("Clé API manquante pour l'OCR Vision")
+    if provider in {"local_openai", "local", "openai-compatible", "openai_compatible", "qwen", "qwen-local"} and not base_url:
+        raise RuntimeError("LOCAL_LLM_BASE_URL est requis pour l'OCR Vision local.")
 
-    return OpenAI(api_key=api_key, base_url=base_url), model
+    kwargs = {"api_key": api_key}
+    if base_url:
+        kwargs["base_url"] = base_url
+    return OpenAI(**kwargs), model
 
 
 def _guess_mime_type(file_path: str) -> str:
@@ -562,7 +577,14 @@ def _clean_text(text: str, is_markdown: bool = False) -> str:
     return text.strip()
 
 
-def _compute_text_quality(text: str) -> dict:
+_QUALITY_HINT_PATTERNS = (
+    r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}",
+    r"(?:\+?\d[\d\s()./\-]{7,}\d)",
+    r"\b(?:experience|experiences|formation|education|competences|skills|profil|profile|summary)\b",
+)
+
+
+def _compute_text_quality(text: str, page_count: int | None = None) -> dict:
     """Calcule des métriques simples de qualité du texte extrait."""
     stripped = text or ""
     char_count = len(stripped)
@@ -572,22 +594,64 @@ def _compute_text_quality(text: str) -> dict:
     alpha_ratio = alpha_count / max(alnum_count, 1)
     word_count = len(re.findall(r"\S+", stripped))
     line_count = stripped.count("\n") + 1 if stripped else 0
+    effective_pages = max(page_count or line_count or 1, 1)
+    chars_per_page = char_count / effective_pages
+    words_per_page = word_count / effective_pages
+    normalized = stripped.lower()
+    anchor_hits = sum(1 for pattern in _QUALITY_HINT_PATTERNS if re.search(pattern, normalized, flags=re.IGNORECASE))
 
     return {
         "char_count": char_count,
         "non_whitespace_count": non_ws_chars,
         "word_count": word_count,
         "line_count": line_count,
+        "page_count": effective_pages,
+        "chars_per_page": round(chars_per_page, 2),
+        "words_per_page": round(words_per_page, 2),
+        "anchor_hits": anchor_hits,
         "alpha_ratio": round(alpha_ratio, 4),
     }
 
 
 def _is_quality_sufficient(quality: dict) -> bool:
     """Détermine si la qualité du texte est suffisante pour le pipeline."""
+    legacy_only = not any(
+        key in quality for key in ("word_count", "words_per_page", "chars_per_page", "anchor_hits")
+    )
+    if legacy_only:
+        return (
+            quality.get("char_count", 0) >= OCR_MIN_CHARS
+            and quality.get("alpha_ratio", 0.0) >= OCR_MIN_ALPHA_RATIO
+        )
+
     return (
         quality.get("char_count", 0) >= OCR_MIN_CHARS
         and quality.get("alpha_ratio", 0.0) >= OCR_MIN_ALPHA_RATIO
+        and (
+            quality.get("word_count", 0) >= OCR_MIN_WORDS
+            or quality.get("words_per_page", 0.0) >= OCR_MIN_WORDS_PER_PAGE
+            or quality.get("chars_per_page", 0.0) >= MIN_CHARS_PER_PAGE
+            or quality.get("anchor_hits", 0) >= OCR_MIN_ANCHOR_HITS
+        )
     )
+
+
+def _quality_rank_tuple(quality: dict) -> tuple[bool, int, float, float, int, int]:
+    return (
+        _is_quality_sufficient(quality),
+        int(quality.get("anchor_hits", 0)),
+        int(round(float(quality.get("words_per_page", 0.0)))),
+        float(quality.get("alpha_ratio", 0.0)),
+        int(quality.get("word_count", 0)),
+        int(quality.get("char_count", 0)),
+    )
+
+
+def _best_quality_candidate(candidates: list[tuple[str, str, dict]]) -> tuple[str, str, dict]:
+    available = [candidate for candidate in candidates if candidate[0]]
+    if not available:
+        return "", "", _compute_text_quality("")
+    return max(available, key=lambda item: _quality_rank_tuple(item[2]))
 
 
 # ---------------------------------------------------------------------------

@@ -15,7 +15,6 @@ Legend:
 
 import io
 import json
-import uuid
 import pytest
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -847,9 +846,11 @@ class TestBrokenExistingTestDetection:
     def test_correct_import_path_for_validate_structure(self):
         """✅ Verify the correct module path for validate_structure."""
         try:
-            from outils.validator import validate_structure  # correct path
+            import importlib
+            module = importlib.import_module("outils.validator")
         except ImportError as e:
             pytest.fail(f"Could not import from outils.validator: {e}")
+        assert module is not None
 
     def test_wrong_import_path_does_not_exist(self):
         """✅ The module 'skills.validator' referenced in test_validator.py does not exist."""

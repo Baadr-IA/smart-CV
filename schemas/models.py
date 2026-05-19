@@ -1,5 +1,6 @@
 from typing import List, Optional, Union
-from pydantic import BaseModel, Field, AliasChoices, field_validator, model_validator
+
+from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
 
 class Identite(BaseModel):
     nom: str
@@ -47,6 +48,16 @@ class Experience(BaseModel):
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     justification: Optional[str] = None
 
+
+class ProjetAcademique(BaseModel):
+    nom: str
+    etablissement: Optional[str] = None
+    equipe: Optional[Union[str, int]] = None
+    duree: Optional[str] = None
+    missions: List[str] = Field(default_factory=list)
+    technologies: List[str] = Field(default_factory=list)
+
+
 class Formation(BaseModel):
     diplome: str = Field(..., validation_alias=AliasChoices('diplome', 'titre', 'nom', 'formation', 'etude'))
     etablissement: str = Field(..., validation_alias=AliasChoices('etablissement', 'ecole', 'universite', 'lieu'))
@@ -66,13 +77,22 @@ class Langue(BaseModel):
 class Metadata(BaseModel):
     date_extraction: Optional[str] = None
     source_fichier: Optional[str] = None
-    fichier_word: Optional[str] = None # Nouveau champ
+    fichier_word: Optional[str] = None
     score_completude: float = 0.0
     champs_incertains: List[str] = Field(default_factory=list)
     version_pipeline: str = "1.1.0"
     char_count: Optional[int] = None
-    method_parsing: Optional[str] = None
+    parsing_method: Optional[str] = Field(
+        default=None,
+        validation_alias=AliasChoices("parsing_method", "method_parsing"),
+        serialization_alias="parsing_method",
+    )
     validation_report: Optional[dict] = None
+    word_path: Optional[str] = None
+    word_filename: Optional[str] = None
+    s3_result_key: Optional[str] = None
+    s3_result_uri: Optional[str] = None
+    s3_word_key: Optional[str] = None
 
 class CVData(BaseModel):
     identite: Identite = Field(validation_alias=AliasChoices(
@@ -85,6 +105,7 @@ class CVData(BaseModel):
     
     competences: List[Union[Competence, str]] = Field(default_factory=list)
     experiences: List[Experience] = Field(default_factory=list)
+    projets_academiques: List[ProjetAcademique] = Field(default_factory=list)
     formations: List[Formation] = Field(default_factory=list)
     certifications: List[Certification] = Field(default_factory=list)
     langues: List[Langue] = Field(default_factory=list)
