@@ -1,99 +1,61 @@
 """
-Normalisation du style rédactionnel : applique le ton Finaxys au JSON extrait.
-
-Finaxys attend :
-- Descriptions de missions commençant par un verbe d'action au passé composé
-  (ex: "A conçu...", "A piloté...", "A développé...")
-- Profil rédigé à la 3e personne
-- Formulation concise et orientée résultat
+Normalisation légère en Python pur — le style Finaxys est produit directement
+par l'extracteur (fusion Option B). Cette étape assure uniquement le nettoyage
+mécanique : casse des technologies, suppression des pronoms résiduels, troncature du titre.
 """
 
-import json
 import logging
-
-from outils.prompt_loader import load_instruction_prompt_by_name
+import re
 
 logger = logging.getLogger(__name__)
 
-_FALLBACK_PROMPT = """Tu es un rédacteur expert en CVs de consultants IT pour le cabinet Finaxys.
+# Mapping casse standard des technos courantes
+_TECH_CASING: dict[str, str] = {
+    "javascript": "JavaScript", "typescript": "TypeScript",
+    "python": "Python", "java": "Java",
+    "kubernetes": "Kubernetes", "k8s": "Kubernetes",
+    "docker": "Docker", "react": "React",
+    "angular": "Angular", "vue": "Vue.js",
+    "nodejs": "Node.js", "node.js": "Node.js",
+    "postgresql": "PostgreSQL", "mysql": "MySQL",
+    "mongodb": "MongoDB", "aws": "AWS",
+    "azure": "Azure", "gcp": "GCP",
+    "git": "Git", "linux": "Linux",
+    "fastapi": "FastAPI", "django": "Django",
+    "flask": "Flask", "spring boot": "Spring Boot",
+    "springboot": "Spring Boot",
+}
 
-Tu reçois un JSON de CV structuré. Tu dois NORMALISER le style rédactionnel selon les conventions Finaxys :
-
-RÈGLES DE STYLE FINAXYS :
-1. Le "profil" doit être rédigé à la 3e personne du singulier
-   Ex: "Développeur Java Senior avec 8 ans d'expérience spécialisé en..."
-2. Les "missions" dans chaque expérience doivent commencer par un verbe d'action au passé composé
-   Ex: "A conçu et développé...", "A piloté la migration...", "A mis en place..."
-3. Les "resultats" doivent être mesurables si possible
-   Ex: "Réduction de 40% du temps de traitement", "Migration de 200+ microservices"
-4. Le "titre_professionnel" doit être concis (max 6 mots)
-5. Supprime les pronoms personnels ("je", "j'ai", "mon")
-6. Uniformise la casse des technologies (JavaScript, pas javascript)
-
-IMPORTANT :
-- Ne modifie PAS les données factuelles (dates, entreprises, certifications)
-- Ne modifie PAS la structure JSON
-- Retourne le JSON complet avec le style normalisé
-- Réponds UNIQUEMENT avec le JSON"""
-
-SYSTEM_PROMPT = load_instruction_prompt_by_name(
-    "cv-normalizer",
-    _FALLBACK_PROMPT,
-) + "\n\nIMPORTANT: Réponds strictement en JSON valide, sans texte additionnel."
+_PRONOUN_RE = re.compile(
+    r"\b(je|j'ai|j'|mon|ma|mes|nous avons|nous)\b", re.IGNORECASE
+)
 
 
-def _clean_json_response(raw: str) -> str:
-    cleaned = raw.strip()
-    if cleaned.startswith("```"):
-        lines = cleaned.split("\n")
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        cleaned = "\n".join(lines)
-    return cleaned
+def _clean_pronouns(text: str) -> str:
+    return re.sub(r" {2,}", " ", _PRONOUN_RE.sub("", text)).strip()
 
 
 def normalize_style(cv_data: dict, client, provider: str) -> dict:
-    """Normalise le style rédactionnel du CV au format Finaxys."""
-    from outils.llm_client import llm_call
-
-    logger.info("Normalisation du style pour : %s",
+    """Normalisation Python : casse des techs, suppression de pronoms résiduels, troncature du titre."""
+    logger.info("Normalisation Python pour : %s",
                 cv_data.get("identite", {}).get("nom", "inconnu"))
 
-    user_message = f"JSON du CV à normaliser :\n{json.dumps(cv_data, ensure_ascii=False, indent=2)}"
-    raw = llm_call(
-        client,
-        provider,
-        SYSTEM_PROMPT,
-        user_message,
-        max_tokens=4096,
-        operation="cv_normalize",
-    )
-    cleaned = _clean_json_response(raw)
+    # Normaliser la casse des compétences
+    for comp in cv_data.get("competences", []):
+        nom = comp.get("nom", "")
+        comp["nom"] = _TECH_CASING.get(nom.lower(), nom)
 
-    try:
-        normalized = json.loads(cleaned)
-    except json.JSONDecodeError as e:
-        logger.error("JSON invalide après normalisation : %s", e)
-        raise ValueError(f"Normalisation a retourné un JSON invalide : {e}")
+    # Troncature du titre à 6 mots
+    title = cv_data.get("titre_professionnel")
+    if title:
+        words = title.split()
+        if len(words) > 6:
+            cv_data["titre_professionnel"] = " ".join(words[:6])
 
-    # Defensive merge: if the LLM dropped 'metadata' (or any other structural key),
-    # restore it from the original data so the pipeline never crashes with KeyError.
-    for key in (
-        "metadata",
-        "identite",
-        "competences",
-        "experiences",
-        "projets_academiques",
-        "formations",
-        "certifications",
-        "langues",
-        "centres_interet",
-    ):
-        if key not in normalized and key in cv_data:
-            logger.warning("normalize_style: LLM dropped key '%s' — restoring from original.", key)
-            normalized[key] = cv_data[key]
+    # Nettoyage des pronoms résiduels dans le profil
+    profil = cv_data.get("profil")
+    if profil:
+        cv_data["profil"] = _clean_pronouns(profil)
 
-    logger.info("Normalisation terminée")
-    return normalized
+    logger.info("Normalisation Python terminée")
+    return cv_data

@@ -22,17 +22,24 @@ STRUCTURE JSON REQUISE :
     "nom": "string", "prenom": "string", "email": "string|null", 
     "localisation": "string|null", "telephone": "string|null", "linkedin": "string|null" 
   },
-  "titre_professionnel": "string|null",
+  "titre_professionnel": "string|null (max 6 mots)",
   "type_poste": "string|null",
-  "profil": "string|null",
+  "profil": "string|null (rédigé à la 3e personne, sans 'je', 'j ai', 'mon')",
   "competences": [
-    { "nom": "string", "categorie": "string", "niveau": "string", "annees_experience": int|null }
+    {
+      "nom": "string (nom normalisé : JS→JavaScript, K8s→Kubernetes, Spring boot→Spring Boot)",
+      "categorie": "string (parmi : Langages de programmation | Frameworks & Librairies | Bases de données | Cloud & DevOps | Outils & Méthodologies | Compétences fonctionnelles | Soft skills)",
+      "niveau": "string (Débutant | Intermédiaire | Confirmé | Expert)",
+      "annees_experience": null,
+      "aliases_experiences": ["string (toutes les variantes de ce nom dans les technologies des expériences)"]
+    }
   ],
   "experiences": [
     {
       "titre": "string", "entreprise": "string", "date_debut": "YYYY-MM", "date_fin": "YYYY-MM|null",
       "en_cours": bool, "projet": "string|null", "equipe": "string|null", "methodologie": "string|null",
-      "missions": ["string"], "technologies": ["string"], "resultats": ["string"]
+      "missions": ["string (commence par un verbe d action au passé composé : A conçu..., A développé..., A mis en place...)"],
+      "technologies": ["string"], "resultats": ["string (quantifié si possible : Réduction de 30%...)"]
     }
   ],
   "projets_academiques": [
@@ -58,7 +65,11 @@ STRUCTURE JSON REQUISE :
 }
 
 RÈGLES D'OR :
-- Pour "competences", ne renvoie JAMAIS une liste de strings. Renvoie toujours une liste d'OBJETS avec "nom", "categorie", "niveau".
+- Pour "competences" : inclus AUSSI les technologies des expériences absentes de la liste principale. Déduplique.
+- Pour "competences.aliases_experiences" : liste toutes les variantes du nom dans les technologies brutes (ex: ["K8s", "Kubernetes"] pour Kubernetes).
+- Pour "competences" : ne renvoie JAMAIS une liste de strings. Renvoie toujours une liste d'OBJETS.
+- Pour "profil" : rédige à la 3e personne, sans "je", "j'ai", "mon", "ma".
+- Pour "missions" : commence par un verbe d'action au passé composé (A conçu, A développé, A piloté...).
 - Si le texte est en Markdown, utilise les titres (#) pour repérer les sections.
 - Réponds UNIQUEMENT avec le JSON."""
 

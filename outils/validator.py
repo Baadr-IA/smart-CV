@@ -67,16 +67,23 @@ SEMANTIC_PROMPT = load_instruction_prompt_by_name(
 
 
 def validate_semantic(cv_data: dict, client, provider: str) -> dict:
-    """Validation sémantique via LLM."""
+    """Validation sémantique via LLM (modèle léger configurable via VALIDATE_SEMANTIC_MODEL)."""
+    import os
     from outils.llm_client import llm_call
 
     logger.info("Validation sémantique en cours...")
+
+    # Utilise un modèle moins cher pour la validation (tâche simple, pas de génération)
+    model_override = None
+    if provider in ("openai", "gemini", "copilot", "local_openai"):
+        model_override = os.getenv("VALIDATE_SEMANTIC_MODEL", "gpt-4o-mini")
 
     raw = llm_call(
         client, provider, SEMANTIC_PROMPT,
         json.dumps(cv_data, ensure_ascii=False, indent=2),
         max_tokens=1024,
         operation="cv_validate_semantic",
+        model_override=model_override,
     )
 
     cleaned = raw.strip()

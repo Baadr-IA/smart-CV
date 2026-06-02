@@ -6,18 +6,23 @@ import time
 import zipfile
 from pathlib import Path
 from typing import Optional
+from urllib.error import HTTPError, URLError
+from urllib.parse import urljoin
+from urllib.request import Request as UrlRequest, urlopen
 from uuid import uuid4
 
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.security import APIKeyHeader
+from psycopg import connect
 from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from schemas.models import CVData
 from service import process_cv_pipeline
 from outils.rag_utils import VectorStoreManager
-from outils.llm_client import create_client, llm_call
+from outils.llm_client import create_client, get_model, llm_call
 from outils.metrics import (
     decrement_active_jobs,
     increment_active_jobs,
@@ -34,6 +39,7 @@ from outils.fs_utils import (
     sanitize_client_filename,
 )
 from outils.storage import (
+    get_s3_client,
     download_json,
     download_to_path,
     s3_bucket,
@@ -41,6 +47,7 @@ from outils.storage import (
     s3_input_prefix,
     s3_key,
     s3_output_prefix,
+    storage_mode,
     upload_file,
     upload_json,
 )
@@ -159,6 +166,137 @@ def _cleanup_temp_file(path: Path) -> None:
                 path.unlink()
     except Exception:
         logger.warning("Impossible de supprimer le fichier temporaire: %s", path)
+
+
+def _run_readiness_check(name: str, checker) -> dict:
+    start = time.perf_counter()
+    try:
+        result = checker()
+    except Exception as exc:
+        logger.warning("Readiness check failed for %s: %s", name, exc)
+        result = {
+            "status": "error",
+            "error": exc.__class__.__name__,
+            "message": str(exc),
+        }
+
+    result.setdefault("status", "ok")
+    result["latencyMs"] = round((time.perf_counter() - start) * 1000, 1)
+    return result
+
+
+def _pgvector_table_name(suffix: str) -> str:
+    prefix = os.getenv("PGVECTOR_TABLE_PREFIX", "rag_vector").strip() or "rag_vector"
+    return f"{prefix}_{suffix}"
+
+
+def _check_storage_readiness() -> dict:
+    mode = storage_mode()
+    if mode == "s3":
+        bucket = _require_s3_bucket()
+        get_s3_client().head_bucket(Bucket=bucket)
+        return {"status": "ok", "mode": "s3", "bucket": bucket}
+
+    for directory in (INPUT_DIR, OUTPUT_DIR, TEMP_DIR):
+        directory.mkdir(exist_ok=True)
+        if not directory.is_dir():
+            raise RuntimeError(f"Répertoire inaccessible: {directory}")
+    return {"status": "ok", "mode": "local"}
+
+
+def _check_llm_readiness() -> dict:
+    client, provider = create_client()
+    del client
+    return {
+        "status": "ok",
+        "provider": provider,
+        "model": get_model(provider),
+    }
+
+
+def _check_pgvector_readiness() -> dict:
+    dsn = os.getenv("PGVECTOR_DSN") or os.getenv("DATABASE_URL") or os.getenv("POSTGRES_DSN")
+    if not dsn:
+        raise RuntimeError("PGVECTOR_DSN ou DATABASE_URL manquant.")
+
+    collection_table = _pgvector_table_name("collections")
+    document_table = _pgvector_table_name("documents")
+    with connect(dsn, autocommit=True, connect_timeout=3) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT
+                current_database(),
+                EXISTS(SELECT 1 FROM pg_extension WHERE extname = 'vector'),
+                to_regclass(%s),
+                to_regclass(%s)
+            """,
+            (collection_table, document_table),
+        )
+        database, vector_enabled, collection_regclass, document_regclass = cur.fetchone()
+
+    if not vector_enabled:
+        raise RuntimeError("Extension pgvector absente.")
+    if collection_regclass is None or document_regclass is None:
+        raise RuntimeError("Tables pgvector non initialisées.")
+
+    return {
+        "status": "ok",
+        "database": database,
+        "vectorExtension": True,
+        "collectionTable": str(collection_regclass),
+        "documentTable": str(document_regclass),
+    }
+
+
+def _check_langfuse_readiness() -> dict:
+    host = os.getenv("LANGFUSE_HOST", "").strip()
+    secret = os.getenv("LANGFUSE_SECRET_KEY", "").strip()
+    public = os.getenv("LANGFUSE_PUBLIC_KEY", "").strip()
+    if not host or not secret or not public:
+        return {"status": "disabled", "enabled": False}
+
+    candidate_paths = ("/api/public/health", "/api/health", "/")
+    last_error: Optional[str] = None
+    for path in candidate_paths:
+        url = urljoin(host.rstrip("/") + "/", path.lstrip("/"))
+        request = UrlRequest(url, headers={"User-Agent": "smartcv-readiness"})
+        try:
+            with urlopen(request, timeout=3) as response:
+                status_code = getattr(response, "status", response.getcode())
+                if 200 <= status_code < 500:
+                    return {
+                        "status": "ok",
+                        "enabled": True,
+                        "host": host,
+                        "httpStatus": status_code,
+                    }
+        except HTTPError as exc:
+            if exc.code in {401, 403}:
+                return {
+                    "status": "ok",
+                    "enabled": True,
+                    "host": host,
+                    "httpStatus": exc.code,
+                }
+            last_error = f"HTTP {exc.code}"
+        except URLError as exc:
+            last_error = str(exc.reason)
+
+    raise RuntimeError(f"Langfuse injoignable ({last_error or 'unknown'}).")
+
+
+def _build_readiness_report() -> dict:
+    checks = {
+        "storage": _run_readiness_check("storage", _check_storage_readiness),
+        "llm": _run_readiness_check("llm", _check_llm_readiness),
+        "pgvector": _run_readiness_check("pgvector", _check_pgvector_readiness),
+        "langfuse": _run_readiness_check("langfuse", _check_langfuse_readiness),
+    }
+    ready = all(check["status"] != "error" for check in checks.values())
+    return {
+        "status": "ready" if ready else "not_ready",
+        "checks": checks,
+    }
 
 
 def _resolve_path_inside(directory: Path, filename: str) -> Path:
@@ -399,6 +537,13 @@ async def root():
 async def health():
     return {"status": "ok"}
 
+
+@app.get("/ready", include_in_schema=False)
+async def ready():
+    report = _build_readiness_report()
+    status_code = 200 if report["status"] == "ready" else 503
+    return JSONResponse(status_code=status_code, content=report)
+
 @app.post(
     "/analyze",
     response_model=CVData,
@@ -563,11 +708,20 @@ async def search_candidates(query: str, results: int = 3):
     _t0 = time.time()
     metric_status = "success"
     candidate_count = 0
+    traced_candidates: list[dict] = []
     try:
         vdb = VectorStoreManager()
         search_results = vdb.search(query, n_results=results)
         
         if not search_results or not search_results['documents'][0]:
+            trace_rag_search(
+                query=query,
+                job_title=query,
+                candidates=[],
+                required_skills=[],
+                context_relevance=0.0,
+                latency_ms=round((time.time() - _t0) * 1000, 1),
+            )
             observe_rag_search(
                 endpoint="/search",
                 mode="dense",
@@ -577,17 +731,37 @@ async def search_candidates(query: str, results: int = 3):
             )
             return {"answer": "DÃ©solÃ©, je n'ai trouvÃ© aucun candidat correspondant Ã  cette recherche.", "candidates": []}
         candidate_count = len(search_results["documents"][0])
+        distances = search_results.get("distances", [[]])[0]
 
         # GÃ©nÃ©ration de la rÃ©ponse IA
         context_parts = []
         for i, doc in enumerate(search_results['documents'][0]):
             source = search_results['metadatas'][0][i].get('source', 'Inconnu')
+            distance = distances[i] if i < len(distances) else 1.0
+            relevance = round(max(0.0, 1.0 - float(distance) / 2.0), 3)
+            traced_candidates.append({
+                "name": source,
+                "source": source,
+                "relevanceScore": relevance,
+            })
             context_parts.append(f"CANDIDAT {i+1} (Source: {source}):\n{doc}")
         
         client, provider = create_client()
         user_msg = f"Demande RH: {query}\n\nProfils trouvÃ©s:\n" + "\n".join(context_parts)
         
         answer = llm_call(client, provider, RAG_SYSTEM_PROMPT, user_msg, operation="rag_answer")
+        avg_relevance = round(
+            sum(candidate["relevanceScore"] for candidate in traced_candidates) / len(traced_candidates),
+            3,
+        ) if traced_candidates else 0.0
+        trace_rag_search(
+            query=query,
+            job_title=query,
+            candidates=traced_candidates,
+            required_skills=[],
+            context_relevance=avg_relevance,
+            latency_ms=round((time.time() - _t0) * 1000, 1),
+        )
         
         return {
             "query": query,

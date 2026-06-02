@@ -26,9 +26,10 @@ from telegram.ext import (
 )
 
 from service import process_cv_pipeline
-from outils.metrics import observe_cv_stage, observe_llm_eval, push_bot_metrics
+from outils.metrics import observe_cv_stage, observe_llm_eval, observe_rag_search, push_bot_metrics
 from outils.rag_utils import VectorStoreManager
-from outils.langfuse_client import init_langfuse, trace_cv_analysis, flush as langfuse_flush
+from outils.langfuse_client import init_langfuse, trace_cv_analysis, trace_rag_search, flush as langfuse_flush
+from outils.chatbot_search import run_chatbot_search
 from outils.fs_utils import sanitize_client_filename, ensure_extension
 from schemas.models import CVData as CVDataModel
 
@@ -220,40 +221,53 @@ async def cmd_search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None
         return
 
     await update.message.reply_text("🔍 Recherche en cours...")
+    search_start = time.perf_counter()
+    metric_status = "success"
+    candidate_count = 0
     try:
         vdb = get_vdb()
-        results = vdb.search(query, n_results=3)
+        search_result = run_chatbot_search(query, vdb=vdb, n_results=3)
+        candidate_count = search_result["candidate_count"]
+        latency_ms = search_result["latency_ms"]
+        trace_rag_search(
+            query=query,
+            job_title=query,
+            candidates=search_result["candidates"],
+            required_skills=[],
+            context_relevance=search_result["avg_relevance"],
+            latency_ms=latency_ms,
+        )
+        langfuse_flush()
+        observe_rag_search(
+            endpoint="telegram:/search",
+            mode="dense",
+            status=metric_status,
+            latency_ms=latency_ms,
+            candidates_returned=candidate_count,
+        )
+        push_bot_metrics(pushgateway_url=os.getenv("PUSHGATEWAY_URL", "http://smartcv-pushgateway:9091"))
 
-        if not results or not results["documents"][0]:
+        if search_result["status"] == "empty":
             await update.message.reply_text("❌ Aucun profil trouvé pour cette recherche.")
             return
 
-        from outils.llm_client import create_client, llm_call
-
-        context_parts = []
-        for i, doc in enumerate(results["documents"][0]):
-            source = results["metadatas"][0][i].get("source", "Inconnu")
-            context_parts.append(f"CANDIDAT {i+1} (Source: {source}):\n{doc}")
-
-        system_prompt = (
-            "Tu es un assistant expert en recrutement pour Finaxys. "
-            "Analyse les profils trouvés et réponds de manière synthétique en français. "
-            "Cite les sources."
-        )
-        user_msg = f"Recherche RH: {query}\n\nProfils trouvés:\n" + "\n---\n".join(context_parts)
-
-        client, provider = create_client()
-        answer = llm_call(client, provider, system_prompt, user_msg, operation="telegram_rag_answer")
-
-        sources = [m.get("source", "") for m in results["metadatas"][0]]
-        sources_str = "\n".join(f"  • {s}" for s in sources if s)
+        sources_str = "\n".join(f"  • {s}" for s in search_result["sources"] if s)
 
         await update.message.reply_text(
-            f"🔍 *Résultats pour :* _{query}_\n\n{answer}\n\n📁 *Sources :*\n{sources_str}",
+            f"🔍 *Résultats pour :* _{query}_\n\n{search_result['answer']}\n\n📁 *Sources :*\n{sources_str}",
             parse_mode="Markdown",
         )
 
     except Exception:
+        metric_status = "error"
+        observe_rag_search(
+            endpoint="telegram:/search",
+            mode="dense",
+            status=metric_status,
+            latency_ms=round((time.perf_counter() - search_start) * 1000, 1),
+            candidates_returned=candidate_count,
+        )
+        push_bot_metrics(pushgateway_url=os.getenv("PUSHGATEWAY_URL", "http://smartcv-pushgateway:9091"))
         logger.exception("Erreur recherche RAG")
         await update.message.reply_text("❌ Erreur lors de la recherche. Réessaie plus tard.")
 

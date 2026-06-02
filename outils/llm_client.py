@@ -155,8 +155,9 @@ def _estimate_cost_usd(model: str, prompt_tokens: int, completion_tokens: int) -
     before_sleep=lambda retry_state: logger.warning(f"Retry {retry_state.attempt_number} après erreur...")
 )
 def llm_call(client, provider: str, system_prompt: str, user_message: str,
-             max_tokens: int = 4096, temperature: float = 0.0, operation: str = "generic") -> str:
-    model = get_model(provider)
+             max_tokens: int = 4096, temperature: float = 0.0, operation: str = "generic",
+             model_override: str | None = None) -> str:
+    model = model_override if model_override else get_model(provider)
     start = time.perf_counter()
 
     try:

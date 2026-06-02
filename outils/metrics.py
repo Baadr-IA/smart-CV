@@ -505,7 +505,7 @@ def push_bot_metrics(pushgateway_url: str = "http://smartcv-pushgateway:9091") -
     if not _PROMETHEUS_ENABLED:
         return
     try:
-        from prometheus_client import push_to_gateway, CollectorRegistry, REGISTRY
+        from prometheus_client import push_to_gateway, REGISTRY
         push_to_gateway(pushgateway_url, job="smartcv-bot", registry=REGISTRY)
         logger.debug("Métriques bot poussées vers %s", pushgateway_url)
     except Exception as e:
