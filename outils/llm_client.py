@@ -8,7 +8,6 @@ import logging
 import os
 import time
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
-from dotenv import load_dotenv
 from outils.metrics import observe_llm_call
 
 # Only retry on genuine transient network/rate-limit errors — NOT on ValueError,
@@ -41,9 +40,6 @@ def _is_transient_error(exc: BaseException) -> bool:
         pass
     return False
 
-# Charger les variables d'environnement au chargement du module
-load_dotenv()
-
 logger = logging.getLogger(__name__)
 
 # Modèles par défaut
@@ -60,6 +56,20 @@ _DEFAULT_PRICING_PER_1K: dict[str, tuple[float, float]] = {
     "claude-3-5-sonnet-20241022": (0.003, 0.015),
 }
 
+
+def _normalized_env_url(env_name: str) -> str | None:
+    """Return a trimmed HTTP(S) URL or None if the env var is empty."""
+    value = os.environ.get(env_name)
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    if not value.startswith(("http://", "https://")):
+        raise ValueError(f"{env_name} doit commencer par http:// ou https://.")
+    return value
+
+
 def get_model(provider: str) -> str:
     """Retourne le modèle configuré pour un provider donné."""
     provider = provider.lower()
@@ -70,15 +80,16 @@ def get_model(provider: str) -> str:
     env_var = f"{provider.upper()}_MODEL"
     return os.environ.get(env_var, _DEFAULT_MODELS.get(provider, "gpt-4o"))
 
+
 def create_client(provider_override: str | None = None):
     """Crée le client LLM selon LLM_PROVIDER dans .env."""
     provider = (provider_override or os.environ.get("LLM_PROVIDER", "openai")).lower()
-    
+
     if provider == "openai":
         from openai import OpenAI
-        base_url = os.environ.get("OPENAI_BASE_URL")
         kwargs = {"api_key": os.environ.get("OPENAI_API_KEY")}
-        if base_url:
+        base_url = _normalized_env_url("OPENAI_BASE_URL")
+        if base_url is not None:
             kwargs["base_url"] = base_url
         return OpenAI(**kwargs), provider
     elif provider == "anthropic":
@@ -100,7 +111,7 @@ def create_client(provider_override: str | None = None):
         return client, provider
     elif provider in {"local_openai", "local", "openai_compatible", "openai-compatible"}:
         from openai import OpenAI
-        base_url = os.environ.get("LOCAL_LLM_BASE_URL", "").strip()
+        base_url = _normalized_env_url("LOCAL_LLM_BASE_URL")
         if not base_url:
             raise ValueError("LOCAL_LLM_BASE_URL est requis pour LLM_PROVIDER=local_openai.")
         client = OpenAI(
