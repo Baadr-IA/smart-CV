@@ -149,10 +149,10 @@
     "formation": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["diplome", "etablissement"],
+      "required": ["diplome"],
       "properties": {
         "diplome": { "type": "string", "minLength": 1 },
-        "etablissement": { "type": "string", "minLength": 1 },
+        "etablissement": { "type": ["string", "null"] },
         "annee": { "type": ["integer", "string", "null"] }
       }
     },

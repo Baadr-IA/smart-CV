@@ -60,7 +60,7 @@ class ProjetAcademique(BaseModel):
 
 class Formation(BaseModel):
     diplome: str = Field(..., validation_alias=AliasChoices('diplome', 'titre', 'nom', 'formation', 'etude'))
-    etablissement: str = Field(..., validation_alias=AliasChoices('etablissement', 'ecole', 'universite', 'lieu'))
+    etablissement: Optional[str] = Field(default=None, validation_alias=AliasChoices('etablissement', 'ecole', 'universite', 'lieu'))
     annee: Optional[Union[int, str]] = None
 
 class Certification(BaseModel):
