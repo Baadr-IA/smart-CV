@@ -39,16 +39,19 @@ services:
         condition: service_healthy
     restart: always
 
-  # Le Bot Telegram (Utilise la MÊME image que l'API)
-  cv-bot:
+  # Interface web RH (remplace l'ancien bot Telegram — utilise la MÊME image que l'API)
+  cv-streamlit:
     image: smart-cv-app:latest # Utilise l'image construite par cv-api
-    container_name: cv-finaxys-bot
-    command: python bot.py
+    container_name: cv-finaxys-streamlit
+    command: streamlit run streamlit_app.py --server.address=0.0.0.0 --server.port=8501
+    ports:
+      - "8501:8501"
     volumes:
       - ./output:/app/output
       - ./logs:/app/logs
       - ./input:/app/input
-      - hf_cache:/root/.cache/huggingface  # Cache modèles HuggingFace persistant
+      - ./cv_originals:/app/cv_originals
+      - hf_cache:/home/appuser/.cache/huggingface  # Cache modèles HuggingFace persistant
     environment:
       - DISABLE_HEALTHCHECK=true
       - PGVECTOR_DSN=postgresql://postgres:postgres@pgvector:5432/smartcv

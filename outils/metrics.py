@@ -86,6 +86,28 @@ if _PROMETHEUS_ENABLED:
         ["source"],
         buckets=(1, 2, 3, 5, 10, 20, 50),
     )
+    CV_EXTRACTION_METHOD_TOTAL = Counter(
+        "smartcv_cv_extraction_method_total",
+        "Count of CV parses by the extraction method that ultimately won "
+        "(pypdf, pytesseract-ocr, llm-vision-api, pymupdf-columns, docling-markdown, python-docx). "
+        "Used to track the real-world escalation rate through the pypdf -> Tesseract -> vision cascade.",
+        ["method"],
+    )
+    CHATBOT_TURN_TOTAL = Counter(
+        "smartcv_chatbot_turn_total",
+        "Count of conversational chatbot turns by outcome "
+        "(needs_clarification: not enough info yet, LLM decision was valid; "
+        "decision_fallback: LLM response was unparseable/unusable, code fell back to asking "
+        "for clarification -- a direct robustness signal on the orchestration LLM; "
+        "empty: search ran but found nothing; success: candidates found and justified).",
+        ["status"],
+    )
+    CHATBOT_TURN_DURATION_SECONDS = Histogram(
+        "smartcv_chatbot_turn_duration_seconds",
+        "End-to-end latency of one conversational chatbot turn (decision + search + justification).",
+        ["status"],
+        buckets=(0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 20.0, 30.0, 60.0),
+    )
     LLM_CALLS_TOTAL = Counter(
         "smartcv_llm_calls_total",
         "Count of LLM calls.",
@@ -210,6 +232,9 @@ else:
     CV_INPUT_FILES_TOTAL = None
     CV_INPUT_SIZE_BYTES = None
     CV_PAGES_TOTAL = None
+    CV_EXTRACTION_METHOD_TOTAL = None
+    CHATBOT_TURN_TOTAL = None
+    CHATBOT_TURN_DURATION_SECONDS = None
     LLM_CALLS_TOTAL = None
     LLM_LATENCY_SECONDS = None
     LLM_TOKENS_TOTAL = None
@@ -337,6 +362,34 @@ def observe_cv_stage(
             stage=stage,
             error_type=_normalize_error_type(error_type),
         ).inc()
+
+
+def observe_extraction_method(method: str) -> None:
+    """Incrémente le compteur de méthode d'extraction gagnante (pypdf/tesseract/vision/...).
+
+    Permet de calculer, en production, le taux d'escalade réel dans la cascade
+    pypdf -> Tesseract -> Qwen2-VL, information qui n'existait auparavant que
+    sur le jeu de test offline.
+    """
+    if CV_EXTRACTION_METHOD_TOTAL is None:
+        return
+    CV_EXTRACTION_METHOD_TOTAL.labels(method=method or "unknown").inc()
+
+
+def observe_chatbot_turn(*, status: str, latency_ms: float) -> None:
+    """Incrémente le compteur/histogramme d'un tour de chatbot conversationnel.
+
+    ``status`` vaut ``needs_clarification`` (pas assez d'info pour chercher),
+    ``empty`` (recherche lancée mais aucun candidat) ou ``success``. Couvre les
+    axes "latence" et une partie de "précision" (répartition des issues) de la
+    mission d'évaluation du chatbot -- la cohérence des justifications
+    générées par le LLM resterait à évaluer via un jugement humain ou un
+    LLM-juge, non construit dans ce projet.
+    """
+    if CHATBOT_TURN_TOTAL is None or CHATBOT_TURN_DURATION_SECONDS is None:
+        return
+    CHATBOT_TURN_TOTAL.labels(status=status).inc()
+    CHATBOT_TURN_DURATION_SECONDS.labels(status=status).observe(latency_ms / 1000.0)
 
 
 def observe_validation_report(report: dict) -> None:

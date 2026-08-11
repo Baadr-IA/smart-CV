@@ -26,6 +26,41 @@ DEFAULT_SQL_PREFILTER_CANDIDATE_POOL = 120
 DEFAULT_HYBRID_RRF_K = 60
 
 
+def list_recent_analyses(
+    limit: int = 10, collection_name: str = DEFAULT_PGVECTOR_COLLECTION
+) -> list[dict[str, Any]]:
+    """Requête légère sur pgvector (pas de chargement du modèle d'embedding) pour
+    afficher l'historique des dernières analyses, ex. au chargement d'une page."""
+    dsn = os.getenv("PGVECTOR_DSN") or os.getenv("DATABASE_URL") or os.getenv("POSTGRES_DSN")
+    if not dsn:
+        return []
+    table_prefix = os.getenv("PGVECTOR_TABLE_PREFIX", DEFAULT_PGVECTOR_TABLE_PREFIX)
+    document_table = f"{table_prefix}_documents"
+    with connect(dsn, autocommit=True, row_factory=dict_row) as conn, conn.cursor() as cur:
+        cur.execute(
+            f"""
+            SELECT doc_id, metadata, created_at
+            FROM {document_table}
+            WHERE collection_name = %s
+            ORDER BY created_at DESC
+            LIMIT %s
+            """,
+            (collection_name, limit),
+        )
+        rows = cur.fetchall()
+    return [
+        {
+            "doc_id": row["doc_id"],
+            "nom": row["metadata"].get("nom", ""),
+            "prenom": row["metadata"].get("prenom", ""),
+            "titre": row["metadata"].get("titre", ""),
+            "source": row["metadata"].get("source", row["doc_id"]),
+            "created_at": row["created_at"],
+        }
+        for row in rows
+    ]
+
+
 def _env_flag(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -95,7 +130,17 @@ def cv_to_searchable_text(cv: CVData) -> str:
         exp_list = []
         for exp in cv.experiences[:5]:
             exp_text = f"{exp.titre} chez {exp.entreprise} ({exp.date_debut} à {exp.date_fin or 'Présent'})"
-            if exp.missions:
+            if exp.projets:
+                for proj in exp.projets:
+                    proj_text = f" — Projet {proj.nom}" if proj.nom else ""
+                    if proj.description:
+                        proj_text += f" : {proj.description}"
+                    if proj.missions:
+                        proj_text += f". Missions : {' '.join(proj.missions[:5])}"
+                    if proj.technologies:
+                        proj_text += f". Technologies : {', '.join(proj.technologies)}"
+                    exp_text += proj_text
+            elif exp.missions:
                 exp_text += f". Missions : {' '.join(exp.missions[:3])}"
             exp_list.append(exp_text)
         sections.append(f"Parcours professionnel : {' | '.join(exp_list)}")
@@ -571,6 +616,10 @@ class VectorStoreManager:
         if "metadatas" in include:
             result["metadatas"] = [row["metadata"] for row in rows]
         return result
+
+    def list_recent(self, limit: int = 10) -> list[dict[str, Any]]:
+        """Retourne les CV indexés les plus récents (pour l'historique des analyses)."""
+        return list_recent_analyses(limit=limit, collection_name=self.collection_name)
 
     def add_cv(
         self,

@@ -31,8 +31,11 @@ fastapi>=0.110.0
 uvicorn>=0.27.0
 python-multipart>=0.0.9
 
-# --- Bot Telegram ---
+# --- Bot Telegram (legacy, non déployé par défaut — voir streamlit_app.py) ---
 python-telegram-bot>=21.0.0
+
+# --- Interface web ---
+streamlit>=1.35.0
 
 # --- RAG & Vector DB (Version légère CPU) ---
 --extra-index-url https://download.pytorch.org/whl/cpu
